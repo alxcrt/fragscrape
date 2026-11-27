@@ -41,6 +41,12 @@ async function load(): Promise<void> {
     session = await ort.InferenceSession.create(file, {
       intraOpNumThreads: parseInt(process.env.BG_MODEL_THREADS || '2', 10),
       graphOptimizationLevel: 'all',
+      // Without these, the arena kept each image's buffers and grew past 11 GB on the
+      // second BRIA run (container OOM); now memory is returned after every inference
+      enableCpuMemArena: false,
+      enableMemPattern: false,
+      executionMode: 'sequential',
+      logSeverityLevel: 3,
     });
     logger.info(`Background model loaded: ${modelName}`);
   } catch (err) {

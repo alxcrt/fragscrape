@@ -16,9 +16,9 @@ services:
       - /app/logs:rw,nosuid,nodev,size=64m,uid=1000,gid=1000
     shm_size: 256m
     pids_limit: 512
-    # BRIA background removal keeps ~9 GB in use once loaded (Alex's choice, 28 Nov)
-    mem_limit: 11g
-    memswap_limit: 11g
+    # BRIA background removal peaks at ~9 GB per image (Alex's choice, 28 Nov)
+    mem_limit: 12g
+    memswap_limit: 12g
     logging:
       driver: local
       options: {max-size: "10m", max-file: "3"}
