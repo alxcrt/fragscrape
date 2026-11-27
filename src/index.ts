@@ -22,6 +22,8 @@ import { TIMEOUT_CONFIG } from './constants/scraping';
 import { apiKeyAuth } from './api/middleware/apiKeyAuth';
 import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
 import browserClient from './proxy/browserClient';
+import swaggerUi from 'swagger-ui-express';
+import { openapiSpec } from './docs/openapi';
 
 const app = express();
 
@@ -32,6 +34,15 @@ app.set('trust proxy', config.api.trustProxy);
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// API documentation (public; requests made from it still need an API key)
+app.get('/openapi.json', (_req, res) => res.json(openapiSpec));
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiSpec, {
+  customSiteTitle: 'Fragrance API',
+  customCss: '.swagger-ui .topbar { display: none }',
+  swaggerOptions: { persistAuthorization: true, tryItOutEnabled: true },
+}));
+app.get('/', (_req, res) => res.redirect('/docs'));
 
 // Rate limiting
 const limiter = rateLimit({
