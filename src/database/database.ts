@@ -364,6 +364,16 @@ class DatabaseService {
     return this.rowToPerfume(row);
   }
 
+  /** Cached perfume by URL regardless of age, with its age in seconds (for stale-while-revalidate). */
+  getPerfumeByUrlAnyAge(url: string): { perfume: Perfume; ageSeconds: number } | null {
+    if (!this.db) throw new DatabaseError('Database not initialized');
+    const row = this.db.prepare(`
+      SELECT *, (julianday('now') - julianday(scraped_at)) * 86400 AS age_seconds FROM perfumes WHERE url = ?
+    `).get(url) as (PerfumeRow & { age_seconds: number }) | undefined;
+    if (!row) return null;
+    return { perfume: this.rowToPerfume(row), ageSeconds: row.age_seconds };
+  }
+
   getPerfumeById(id: number): Perfume | null {
     if (!this.db) throw new DatabaseError('Database not initialized');
 

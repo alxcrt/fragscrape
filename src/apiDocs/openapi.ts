@@ -1,22 +1,7 @@
 /**
- * OpenAPI 3 description of the public API, served at /openapi.json and
- * rendered with Swagger UI at /docs.
+ * OpenAPI 3 description of the API, served at /openapi.json and rendered
+ * with Swagger UI at /docs.
  */
-const id = (name: string, description: string) => ({
-  name,
-  in: 'path',
-  required: true,
-  description,
-  schema: { type: 'integer', minimum: 1 },
-});
-
-const cache = {
-  name: 'cache',
-  in: 'query',
-  description: 'Use cached data when fresh. Pass `false` to force a fresh lookup.',
-  schema: { type: 'boolean', default: true },
-};
-
 const ok = (schema: object, description = 'Success') => ({
   description,
   content: {
@@ -40,95 +25,108 @@ const errors = {
   429: { $ref: '#/components/responses/TooManyRequests' },
 };
 
-const json = (schema: object) => ({ required: true, content: { 'application/json': { schema } } });
-const message = { type: 'object', properties: { message: { type: 'string' } } };
+const item = { $ref: '#/components/schemas/Perfume' };
+const matched = { allOf: [item, { type: 'object', properties: { confidence: { type: 'number', minimum: 0, maximum: 1, example: 0.93 } } }] };
+const matchResult = {
+  type: 'object',
+  properties: {
+    match: { ...matched, nullable: true, description: 'Best match, or null when nothing is close enough' },
+    alternatives: { type: 'array', items: matched },
+  },
+};
 
 export const openapiSpec = {
   openapi: '3.0.3',
   info: {
     title: 'Fragrance API',
-    version: '1.0.0',
+    version: '2.0.0',
     description: [
-      'Look up perfumes, notes, accords and ratings, browse brands and rankings,',
-      'and keep your own saved searches, tags and notes.',
+      'Find perfumes fast: autocomplete while typing, match messy text (for example a label read from a photo),',
+      'and get details with notes, accords, ratings and similar perfumes.',
       '',
-      'Every `/api` request needs an API key, sent as `X-API-Key: <key>` or',
-      '`Authorization: Bearer <key>`. Use **Authorize** to try requests from this page.',
+      '**Auth:** every `/api` request needs an API key, sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`.',
+      'Use **Authorize** to try requests here. Images under `/images` need no key, so they work in `<img>` tags.',
       '',
-      'Responses use the envelope `{ success, data, timestamp }`; errors return',
-      '`{ success: false, error, timestamp }`.',
+      '**IDs:** every perfume has a numeric `id`; use it with `/api/perfumes/{id}` and `/images/{id}.webp`.',
+      '',
+      'Responses use `{ success, data, timestamp }`; errors return `{ success: false, error, timestamp }`.',
     ].join('\n'),
   },
   security: [{ ApiKey: [] }, { Bearer: [] }],
   tags: [
-    { name: 'Perfumes', description: 'Search and perfume details' },
-    { name: 'Browse', description: 'Brands and rankings' },
-    { name: 'Saved searches', description: 'Save a search and work through its results' },
-    { name: 'Tags & notes', description: 'Your own tags, notes and interest ratings' },
-    { name: 'Cache', description: 'Manage cached lookups' },
+    { name: 'Search', description: 'Autocomplete and matching' },
+    { name: 'Perfumes', description: 'Details, brands and rankings' },
+    { name: 'Images', description: 'Optimised WebP images' },
     { name: 'System', description: 'Service health' },
   ],
   paths: {
-    '/health': {
+    '/api/autocomplete': {
       get: {
-        tags: ['System'],
-        summary: 'Health check',
-        description: 'Service status. Needs no API key.',
-        security: [],
-        responses: { 200: { description: 'Healthy' }, 503: { description: 'Unhealthy' } },
-      },
-    },
-    '/api/search': {
-      get: {
-        tags: ['Perfumes'],
-        summary: 'Search perfumes',
+        tags: ['Search'],
+        summary: 'Suggestions while typing',
+        description: 'Prefix and typo tolerant, popular perfumes first. Call it on each keystroke (debounce ~150 ms).',
         parameters: [
-          { name: 'q', in: 'query', required: true, description: 'Search text', schema: { type: 'string', minLength: 1, maxLength: 200, example: 'Aventus' } },
-          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
-          cache,
+          { name: 'q', in: 'query', required: true, description: 'Text typed so far', schema: { type: 'string', maxLength: 100, example: 'baccarat ro' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 20, default: 8 } },
         ],
-        responses: { 200: ok({ type: 'array', items: { $ref: '#/components/schemas/SearchResult' } }), ...errors },
+        responses: { 200: ok({ type: 'array', items: item }), ...errors },
       },
     },
-    '/api/perfume/{brand}/{name}': {
+    '/api/match': {
       get: {
-        tags: ['Perfumes'],
-        summary: 'Get perfume details',
-        description: 'Brand and name are the identifiers returned in search results, e.g. `Creed` / `aventus`.',
+        tags: ['Search'],
+        summary: 'Match free text to a perfume',
+        description: 'For noisy text such as a label read from a photo: sizes, packaging words, extra words and small typos are tolerated. Returns the best match with a confidence score and alternatives.',
         parameters: [
-          { name: 'brand', in: 'path', required: true, schema: { type: 'string', example: 'Creed' } },
-          { name: 'name', in: 'path', required: true, schema: { type: 'string', example: 'aventus' } },
-          { name: 'year', in: 'query', description: 'Release year, to pick between same-named perfumes', schema: { type: 'integer', minimum: 1800 } },
-          cache,
+          { name: 'text', in: 'query', required: true, schema: { type: 'string', maxLength: 500, example: 'CREED AVENTUS eau de parfum 100ml vaporisateur' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 10, default: 5 } },
         ],
-        responses: { 200: ok({ $ref: '#/components/schemas/Perfume' }), ...errors },
+        responses: { 200: ok(matchResult), ...errors },
       },
-    },
-    '/api/perfume/by-url': {
       post: {
-        tags: ['Perfumes'],
-        summary: 'Get perfume details by page URL',
-        description: 'Pass the `url` of a perfume as returned by search.',
-        parameters: [cache],
-        requestBody: json({ type: 'object', required: ['url'], properties: { url: { type: 'string', format: 'uri', maxLength: 500 } } }),
-        responses: { 200: ok({ $ref: '#/components/schemas/Perfume' }), ...errors },
+        tags: ['Search'],
+        summary: 'Match free text to a perfume (long text)',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['text'],
+                properties: {
+                  text: { type: 'string', maxLength: 2000, example: 'MAISON FRANCIS KURKDJIAN PARIS BACCARAT ROUGE 540 EXTRAIT DE PARFUM 70 ml' },
+                  limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: ok(matchResult), ...errors },
       },
     },
-    '/api/brand/{brand}': {
+    '/api/perfumes/{id}': {
       get: {
-        tags: ['Browse'],
-        summary: 'List perfumes by brand',
+        tags: ['Perfumes'],
+        summary: 'Perfume details',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1, example: 1 } }],
+        responses: { 200: ok({ $ref: '#/components/schemas/PerfumeDetail' }), ...errors },
+      },
+    },
+    '/api/brands/{name}': {
+      get: {
+        tags: ['Perfumes'],
+        summary: 'Perfumes by brand, most popular first',
         parameters: [
-          { name: 'brand', in: 'path', required: true, schema: { type: 'string', example: 'Creed' } },
-          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 1000, default: 1 } },
+          { name: 'name', in: 'path', required: true, schema: { type: 'string', example: 'Tom Ford' } },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
         ],
-        responses: { 200: ok({ type: 'array', items: { $ref: '#/components/schemas/SearchResult' } }), ...errors },
+        responses: { 200: ok({ type: 'array', items: item }), ...errors },
       },
     },
     '/api/rankings': {
       get: {
-        tags: ['Browse'],
-        summary: 'Top-ranked perfumes',
+        tags: ['Perfumes'],
+        summary: 'Top-rated perfumes',
         parameters: [
           { name: 'category', in: 'query', required: true, schema: { type: 'string', enum: ['mens', 'womens', 'unisex'] } },
           { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 1 } },
@@ -137,111 +135,31 @@ export const openapiSpec = {
           { name: 'edition', in: 'query', schema: { type: 'string', enum: ['regular', 'limited', 'collectors', 'all'], default: 'all' } },
         ],
         responses: {
-          200: ok({
-            type: 'object',
-            properties: {
-              category: { type: 'string' },
-              page: { type: 'integer' },
-              items: { type: 'array', items: { type: 'object', properties: { rank: { type: 'integer' }, name: { type: 'string' }, brand: { type: 'string' }, url: { type: 'string' } } } },
-            },
-          }),
+          200: ok({ type: 'array', items: { allOf: [{ type: 'object', properties: { rank: { type: 'integer', example: 1 } } }, item] } }),
           ...errors,
         },
       },
     },
-    '/api/queries': {
+    '/images/{id}.webp': {
       get: {
-        tags: ['Saved searches'],
-        summary: 'List saved searches with progress',
-        responses: { 200: ok({ type: 'array', items: { $ref: '#/components/schemas/SavedQuery' } }), ...errors },
-      },
-      post: {
-        tags: ['Saved searches'],
-        summary: 'Save a search and snapshot its results',
-        requestBody: json({ type: 'object', required: ['query'], properties: { query: { type: 'string', maxLength: 200, example: 'oud rose' }, name: { type: 'string', maxLength: 100, example: 'Winter shortlist' } } }),
-        responses: { 201: ok({ $ref: '#/components/schemas/SavedQuery' }, 'Created'), 200: ok({ $ref: '#/components/schemas/SavedQuery' }), ...errors },
-      },
-    },
-    '/api/queries/{id}': {
-      parameters: [id('id', 'Saved search ID')],
-      get: { tags: ['Saved searches'], summary: 'Get a saved search with all its items', responses: { 200: ok({ $ref: '#/components/schemas/SavedQuery' }), ...errors } },
-      patch: {
-        tags: ['Saved searches'],
-        summary: 'Rename a saved search',
-        requestBody: json({ type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 100 } } }),
-        responses: { 200: ok({ $ref: '#/components/schemas/SavedQuery' }), ...errors },
-      },
-      delete: { tags: ['Saved searches'], summary: 'Delete a saved search', responses: { 200: ok(message), ...errors } },
-    },
-    '/api/queries/{id}/refresh': {
-      post: { tags: ['Saved searches'], summary: 'Re-run the search and add new results', parameters: [id('id', 'Saved search ID')], responses: { 200: ok({ $ref: '#/components/schemas/SavedQuery' }), ...errors } },
-    },
-    '/api/queries/{id}/next': {
-      get: { tags: ['Saved searches'], summary: 'Next unreviewed item', parameters: [id('id', 'Saved search ID')], responses: { 200: ok({ type: 'object' }), ...errors } },
-    },
-    '/api/queries/{id}/items/{itemId}': {
-      patch: {
-        tags: ['Saved searches'],
-        summary: 'Mark an item reviewed or skipped',
-        parameters: [id('id', 'Saved search ID'), id('itemId', 'Item ID')],
-        requestBody: json({ type: 'object', properties: { reviewed: { type: 'boolean' }, skipped: { type: 'boolean' } } }),
-        responses: { 200: ok({ type: 'object' }), ...errors },
+        tags: ['Images'],
+        summary: 'Perfume image (WebP)',
+        description: 'No API key needed. Long-lived cache headers.',
+        security: [],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } },
+          { name: 'size', in: 'query', schema: { type: 'string', enum: ['small', 'large'], default: 'small' }, description: 'small = 240 px, large = 720 px' },
+        ],
+        responses: { 200: { description: 'Image', content: { 'image/webp': { schema: { type: 'string', format: 'binary' } } } }, 404: { description: 'No image' } },
       },
     },
-    '/api/perfumes/{id}/tags': {
-      parameters: [id('id', 'Stored perfume ID')],
-      get: { tags: ['Tags & notes'], summary: 'List tags on a perfume', responses: { 200: ok({ type: 'array', items: { type: 'string' } }), ...errors } },
-      post: {
-        tags: ['Tags & notes'],
-        summary: 'Add a tag',
-        description: 'Suggested tags: `want to try`, `tested`, `own`, `pass`. Any text up to 50 characters works.',
-        requestBody: json({ type: 'object', required: ['tag'], properties: { tag: { type: 'string', maxLength: 50, example: 'want to try' } } }),
-        responses: { 200: ok({ type: 'object' }), ...errors },
-      },
-    },
-    '/api/perfumes/{id}/tags/{tag}': {
-      delete: {
-        tags: ['Tags & notes'],
-        summary: 'Remove a tag',
-        parameters: [id('id', 'Stored perfume ID'), { name: 'tag', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: ok(message), ...errors },
-      },
-    },
-    '/api/perfumes/{id}/user-data': {
-      parameters: [id('id', 'Stored perfume ID')],
-      get: { tags: ['Tags & notes'], summary: 'Get your notes and interest', responses: { 200: ok({ $ref: '#/components/schemas/UserData' }), ...errors } },
-      put: {
-        tags: ['Tags & notes'],
-        summary: 'Set notes and/or interest (1-5)',
-        requestBody: json({ $ref: '#/components/schemas/UserData' }),
-        responses: { 200: ok({ $ref: '#/components/schemas/UserData' }), ...errors },
-      },
-      delete: { tags: ['Tags & notes'], summary: 'Clear notes and interest', responses: { 200: ok(message), ...errors } },
-    },
-    '/api/tags': {
-      get: { tags: ['Tags & notes'], summary: 'All tags with counts', responses: { 200: ok({ type: 'array', items: { type: 'object', properties: { tag: { type: 'string' }, count: { type: 'integer' } } } }), ...errors } },
-    },
-    '/api/collection': {
+    '/health': {
       get: {
-        tags: ['Tags & notes'],
-        summary: 'Perfumes with a given tag',
-        parameters: [{ name: 'tag', in: 'query', required: true, schema: { type: 'string', example: 'want to try' } }],
-        responses: { 200: ok({ type: 'array', items: { $ref: '#/components/schemas/Perfume' } }), ...errors },
+        tags: ['System'],
+        summary: 'Health check',
+        security: [],
+        responses: { 200: { description: 'Healthy' }, 503: { description: 'Unhealthy' } },
       },
-    },
-    '/api/cleanup': {
-      delete: { tags: ['Tags & notes'], summary: 'Delete every perfume tagged `pass`', responses: { 200: ok(message), ...errors } },
-    },
-    '/api/cache': {
-      delete: {
-        tags: ['Cache'],
-        summary: 'Clear cached lookups',
-        parameters: [{ name: 'type', in: 'query', schema: { type: 'string', enum: ['all', 'perfumes', 'search', 'expired'], default: 'all' } }],
-        responses: { 200: ok(message), ...errors },
-      },
-    },
-    '/api/cache/error-pages': {
-      delete: { tags: ['Cache'], summary: 'Remove cached failed lookups', responses: { 200: ok(message), ...errors } },
     },
   },
   components: {
@@ -260,77 +178,52 @@ export const openapiSpec = {
         type: 'object',
         properties: { success: { type: 'boolean', example: false }, error: { type: 'string' }, timestamp: { type: 'string', format: 'date-time' } },
       },
-      SearchResult: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', example: 'Aventus' },
-          brand: { type: 'string', example: 'Creed' },
-          year: { type: 'integer' },
-          url: { type: 'string' },
-          imageUrl: { type: 'string' },
-          rating: { type: 'number' },
-        },
-      },
       Perfume: {
         type: 'object',
+        required: ['id', 'name', 'brand'],
         properties: {
-          name: { type: 'string', example: 'Aventus' },
-          brand: { type: 'string', example: 'Creed' },
-          year: { type: 'integer' },
-          url: { type: 'string' },
-          imageUrl: { type: 'string' },
-          concentration: { type: 'string' },
+          id: { type: 'integer', example: 42 },
+          name: { type: 'string', example: 'Baccarat Rouge 540' },
+          brand: { type: 'string', example: 'Maison Francis Kurkdjian' },
+          variant: { type: 'string', example: 'Extrait de Parfum', description: 'Concentration or edition when several share a name' },
+          year: { type: 'integer', example: 2017 },
           gender: { type: 'string', enum: ['male', 'female', 'unisex'] },
-          description: { type: 'string' },
-          notes: {
+          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp' },
+          rating: { type: 'number', description: 'Average rating, 0-10', example: 8.2 },
+          votes: { type: 'integer', description: 'Number of ratings', example: 3408 },
+        },
+      },
+      PerfumeDetail: {
+        allOf: [
+          { $ref: '#/components/schemas/Perfume' },
+          {
             type: 'object',
             properties: {
-              top: { type: 'array', items: { type: 'string' }, example: ['Bergamot', 'Apple'] },
-              heart: { type: 'array', items: { type: 'string' } },
-              base: { type: 'array', items: { type: 'string' } },
+              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large' },
+              description: { type: 'string' },
+              perfumer: { type: 'string', example: 'Francis Kurkdjian' },
+              notes: {
+                type: 'object',
+                properties: {
+                  top: { type: 'array', items: { type: 'string' }, example: ['Saffron', 'Bitter almond'] },
+                  heart: { type: 'array', items: { type: 'string' }, example: ['Jasmine'] },
+                  base: { type: 'array', items: { type: 'string' }, example: ['Ambergris', 'Cedarwood', 'Musk'] },
+                },
+              },
+              accords: { type: 'array', items: { type: 'string' }, example: ['Sweet', 'Woody', 'Spicy'] },
+              longevity: { type: 'number', description: '0-10' },
+              sillage: { type: 'number', description: '0-10' },
+              bottle: { type: 'number', description: 'Bottle design rating, 0-10' },
+              value: { type: 'number', description: 'Value for money, 0-10' },
+              rank: { type: 'object', properties: { position: { type: 'integer' }, category: { type: 'string' } } },
+              status: { type: 'string', enum: ['in-production', 'discontinued'] },
+              similar: {
+                type: 'array',
+                items: { allOf: [{ $ref: '#/components/schemas/Perfume' }, { type: 'object', properties: { similarity: { type: 'number', minimum: 0, maximum: 1 } } }] },
+              },
             },
           },
-          accords: { type: 'array', items: { type: 'string' }, example: ['Fresh', 'Fruity'] },
-          rating: { type: 'number', description: 'Overall scent rating (0-10)', example: 8.4 },
-          totalRatings: { type: 'integer' },
-          longevity: { type: 'number' },
-          longevityRatingCount: { type: 'integer' },
-          sillage: { type: 'number' },
-          sillageRatingCount: { type: 'integer' },
-          bottleRating: { type: 'number' },
-          bottleRatingCount: { type: 'integer' },
-          priceValue: { type: 'number' },
-          priceValueRatingCount: { type: 'integer' },
-          reviewCount: { type: 'integer' },
-          statementCount: { type: 'integer' },
-          photoCount: { type: 'integer' },
-          rank: { type: 'integer' },
-          rankCategory: { type: 'string' },
-          perfumer: { type: 'string' },
-          productionStatus: { type: 'string', enum: ['in-production', 'discontinued', 'unknown'] },
-          similarFragrances: {
-            type: 'array',
-            items: { type: 'object', properties: { name: { type: 'string' }, brand: { type: 'string' }, url: { type: 'string' }, similarity: { type: 'number' } } },
-          },
-          scrapedAt: { type: 'string', format: 'date-time', description: 'When the data was fetched' },
-          _cached: { type: 'boolean', description: 'Present when served from cache' },
-        },
-      },
-      SavedQuery: {
-        type: 'object',
-        properties: {
-          id: { type: 'integer' },
-          name: { type: 'string' },
-          query: { type: 'string' },
-        },
-        additionalProperties: true,
-      },
-      UserData: {
-        type: 'object',
-        properties: {
-          notes: { type: 'string', maxLength: 5000, example: 'Smoky, leathery. Try in winter.' },
-          interest: { type: 'integer', minimum: 1, maximum: 5, example: 4 },
-        },
+        ],
       },
     },
   },
