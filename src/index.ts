@@ -23,7 +23,7 @@ import { apiKeyAuth } from './api/middleware/apiKeyAuth';
 import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
 import browserClient from './proxy/browserClient';
 import swaggerUi from 'swagger-ui-express';
-import { openapiSpec } from './docs/openapi';
+import { openapiSpec } from './apiDocs/openapi';
 
 const app = express();
 
