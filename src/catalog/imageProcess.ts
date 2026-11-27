@@ -39,8 +39,127 @@ const smoothstep = (x: number, lo: number, hi: number): number => {
  *    (e.g. a cap touching the top) keeps its highlights.
  * 3. Soft 1 px trim of the outer edge, which removes the white fringe from the photo.
  * No colour un-mixing: dividing by small alpha values amplified JPEG noise into speckles.
+ * Photos on pure white use the photo's own outline instead (studioMatte).
  */
 export function refineMatte(matte: Buffer, width: number, height: number, rgba?: Buffer): Buffer {
+  if (rgba && pureWhiteBorderRatio(rgba, width, height) >= 0.5) return studioMatte(matte, width, height, rgba);
+  return modelMatte(matte, width, height, rgba);
+}
+
+const PURE = 4; // photos cut out on pure white: the background is within this of 255
+const SEAL = 3; // px: breaks in faint outlines narrower than ~2x this are sealed
+
+/** Box dilation of a binary mask with the given radius, in O(n). */
+function dilate(mask: Uint8Array, width: number, height: number, r: number): Uint8Array {
+  const tmp = new Uint8Array(mask.length);
+  const out = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let count = 0;
+    for (let x = 0; x < Math.min(r, width); x++) count += mask[row + x];
+    for (let x = 0; x < width; x++) {
+      if (x + r < width) count += mask[row + x + r];
+      if (x - r - 1 >= 0) count -= mask[row + x - r - 1];
+      tmp[row + x] = count > 0 ? 1 : 0;
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    let count = 0;
+    for (let y = 0; y < Math.min(r, height); y++) count += tmp[y * width + x];
+    for (let y = 0; y < height; y++) {
+      if (y + r < height) count += tmp[(y + r) * width + x];
+      if (y - r - 1 >= 0) count -= tmp[(y - r - 1) * width + x];
+      out[y * width + x] = count > 0 ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function pureWhiteBorderRatio(rgba: Buffer, width: number, height: number): number {
+  let white = 0, total = 0;
+  const check = (p: number) => { total++; if (distance(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2]) <= PURE) white++; };
+  for (let x = 0; x < width; x++) { check(x); check((height - 1) * width + x); }
+  for (let y = 1; y < height - 1; y++) { check(y * width); check(y * width + width - 1); }
+  return total ? white / total : 0;
+}
+
+/**
+ * Studio photos on pure white: the photo itself outlines the product more precisely
+ * than the model, especially clear glass (slightly grey, never pure white).
+ * - outside = pure white connected to the border
+ * - product = everything else that is connected to what the model sees as product
+ *   (drops stray JPEG specks in the background)
+ * - enclosed pure-white areas the model is sure are background stay transparent (ring caps)
+ * - anti-aliased outline from the pixel's distance to white
+ */
+function studioMatte(matte: Buffer, width: number, height: number, rgba: Buffer): Buffer {
+  const n = width * height;
+  const dist = new Uint8Array(n);
+  for (let p = 0; p < n; p++) dist[p] = distance(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2]);
+
+  // Morphological closing: thicken the product's outline before the flood so small breaks
+  // in faint glass outlines are sealed, then give the margin back to the white background
+  const nonWhite = new Uint8Array(n);
+  // The model's view helps where the photo has no outline at all (very clear glass walls)
+  for (let p = 0; p < n; p++) nonWhite[p] = dist[p] > PURE || matte[p] > 80 ? 1 : 0;
+  const barrier = dilate(nonWhite, width, height, SEAL);
+
+  const outside = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let head = 0, tail = 0;
+  const push = (p: number) => { if (!outside[p] && !barrier[p]) { outside[p] = 1; queue[tail++] = p; } };
+  for (let x = 0; x < width; x++) { push(x); push((height - 1) * width + x); }
+  for (let y = 0; y < height; y++) { push(y * width); push(y * width + width - 1); }
+  const flood = (step: (p: number) => void) => {
+    while (head < tail) {
+      const p = queue[head++], x = p % width;
+      if (x > 0) step(p - 1);
+      if (x < width - 1) step(p + 1);
+      if (p >= width) step(p - width);
+      if (p < n - width) step(p + width);
+    }
+  };
+  flood(push);
+  // Grow back over the sealing margin, through background white only
+  let frontier: number[] = [];
+  for (let p = 0; p < n; p++) if (outside[p]) frontier.push(p);
+  for (let r = 0; r < SEAL + 1; r++) {
+    const next: number[] = [];
+    for (const p of frontier) {
+      const x = p % width;
+      for (const q of [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, p >= width ? p - width : -1, p < n - width ? p + width : -1]) {
+        if (q >= 0 && !outside[q] && dist[q] <= PURE) { outside[q] = 1; next.push(q); }
+      }
+    }
+    frontier = next;
+  }
+
+  // Keep only regions connected to the model's product (strong matte), drop specks
+  const keep = new Uint8Array(n);
+  head = 0; tail = 0;
+  for (let p = 0; p < n; p++) if (!outside[p] && matte[p] > 128) { keep[p] = 1; queue[tail++] = p; }
+  while (head < tail) {
+    const p = queue[head++], x = p % width;
+    const visit = (q: number) => { if (!keep[q] && !outside[q]) { keep[q] = 1; queue[tail++] = q; } };
+    if (x > 0) visit(p - 1);
+    if (x < width - 1) visit(p + 1);
+    if (p >= width) visit(p - width);
+    if (p < n - width) visit(p + width);
+  }
+
+  const out = Buffer.alloc(n);
+  for (let p = 0; p < n; p++) {
+    if (!keep[p]) continue;
+    if (dist[p] <= PURE && matte[p] < 20) continue; // real see-through gap
+    const x = p % width;
+    const edge = (x > 0 && !keep[p - 1]) || (x < width - 1 && !keep[p + 1])
+      || (p >= width && !keep[p - width]) || (p < n - width && !keep[p + width]);
+    out[p] = edge ? Math.round(255 * Math.max(smoothstep(dist[p], PURE, PURE + 24), matte[p] / 255)) : 255;
+  }
+  return out;
+}
+
+function modelMatte(matte: Buffer, width: number, height: number, rgba?: Buffer): Buffer {
   const n = width * height;
   const a = new Float32Array(n);
   for (let p = 0; p < n; p++) {

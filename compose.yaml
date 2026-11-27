@@ -16,9 +16,9 @@ services:
       - /app/logs:rw,nosuid,nodev,size=64m,uid=1000,gid=1000
     shm_size: 256m
     pids_limit: 512
-    # Room for the background-removal model (~1.5 GB peak) next to the API
-    mem_limit: 3g
-    memswap_limit: 3g
+    # BRIA background removal keeps ~9 GB in use once loaded (Alex's choice, 28 Nov)
+    mem_limit: 11g
+    memswap_limit: 11g
     logging:
       driver: local
       options: {max-size: "10m", max-file: "3"}
@@ -35,8 +35,8 @@ services:
       RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
       RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1500}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      BG_MODEL: ${BG_MODEL:-isnet}
-      BG_MODEL_THREADS: ${BG_MODEL_THREADS:-2}
+      BG_MODEL: ${BG_MODEL:-bria}
+      BG_MODEL_THREADS: ${BG_MODEL_THREADS:-3}
       # Read-only root: Chromium keeps its profile/crash data under /tmp
       HOME: /tmp
       XDG_CONFIG_HOME: /tmp/.config

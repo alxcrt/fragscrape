@@ -4,16 +4,19 @@ import logger from '../utils/logger';
 
 /**
  * AI background removal (salient object segmentation) with ONNX Runtime.
- * Default model: ISNet general-use (Apache-2.0): kept whole bottles (stoppers,
- * clear glass) best in our tests, ~1.5 s per image, ~1.5 GB RAM.
- * BG_MODEL=birefnet uses BiRefNet (MIT): crisper edges but cut some glass,
- * ~5x slower and ~7-10 GB RAM, so it is not the default.
+ * Default: BRIA RMBG-2.0 (CC BY-NC 4.0, non-commercial). Trained on product photos:
+ * the only model that kept every clear-glass wall, cap and gap right in our tests.
+ * Heavy: ~9 GB RAM, ~20-35 s per image on CPU; images are processed once and stored.
+ * BG_MODEL=isnet (ISNet general-use, Apache-2.0, ~1.5 GB, ~2 s) is the light fallback.
  */
-interface ModelConfig { file: string; mean: number[]; std: number[]; sigmoid: boolean }
+interface ModelConfig { file: string; mean: number[]; std: number[]; sigmoid: boolean; refine: boolean }
 
 const MODELS: Record<string, ModelConfig> = {
-  isnet: { file: 'isnet-general-use.onnx', mean: [0.5, 0.5, 0.5], std: [1, 1, 1], sigmoid: false },
-  birefnet: { file: 'BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: true },
+  // Product-trained (BiRefNet architecture); its mask is used as-is, like rembg does
+  bria: { file: 'bria-rmbg-2.0.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: false, refine: false },
+  // Lighter fallbacks; their masks need refineMatte (clear glass, haze)
+  isnet: { file: 'isnet-general-use.onnx', mean: [0.5, 0.5, 0.5], std: [1, 1, 1], sigmoid: false, refine: true },
+  birefnet: { file: 'BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: true, refine: true },
 };
 const SIZE = 1024;
 
@@ -22,7 +25,7 @@ let ort: Ort | null = null;
 let session: import('onnxruntime-node').InferenceSession | null = null;
 let loading: Promise<void> | null = null;
 let unavailable = false;
-const modelName = process.env.BG_MODEL === 'birefnet' ? 'birefnet' : 'isnet';
+const modelName = process.env.BG_MODEL && process.env.BG_MODEL in MODELS ? process.env.BG_MODEL : 'bria';
 const model = MODELS[modelName];
 
 async function load(): Promise<void> {
@@ -48,6 +51,11 @@ async function load(): Promise<void> {
 
 export function aiAvailable(): boolean {
   return !unavailable;
+}
+
+/** Whether the active model's mask needs post-processing (refineMatte). */
+export function maskNeedsRefine(): boolean {
+  return model.refine;
 }
 
 let chain: Promise<unknown> = Promise.resolve();

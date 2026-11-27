@@ -70,12 +70,25 @@ describe('refineMatte', () => {
     expect(refineMatte(m, cw, cw, img)[4 * cw + 4]).toBe(0);
   });
 
-  it('keeps dark product pixels the model hesitated on', () => {
-    const cw = 6, img = Buffer.alloc(cw * cw * 4, 255), m = Buffer.alloc(cw * cw, 0);
+  it('keeps dark product pixels the model hesitated on (photo not on pure white)', () => {
+    const cw = 6, img = Buffer.alloc(cw * cw * 4, 240), m = Buffer.alloc(cw * cw, 0);
     const i = (2 * cw + 2) * 4;
     img[i] = img[i + 1] = img[i + 2] = 20;
     m[2 * cw + 2] = 90;
     expect(refineMatte(m, cw, cw, img)[2 * cw + 2]).toBeGreaterThan(100);
+  });
+
+  it('outlines products on pure white from the photo, including clear glass', () => {
+    // 32x32 pure white photo: a bottle (dark liquid + clear glass wall the model misses) and a stray speck
+    const cw = 32, img = Buffer.alloc(cw * cw * 4, 255), m = Buffer.alloc(cw * cw, 0);
+    const set = (x: number, y: number, v: number, mv: number) => { const i = (y * cw + x) * 4; img[i] = img[i + 1] = img[i + 2] = v; m[y * cw + x] = mv; };
+    for (let y = 10; y < 22; y++) for (let x = 10; x < 22; x++) set(x, y, 235, 0);    // clear glass, model sees nothing
+    for (let y = 13; y < 19; y++) for (let x = 13; x < 19; x++) set(x, y, 120, 255);  // liquid, model sure
+    set(28, 2, 200, 0);                                                                // JPEG speck in the background
+    const out: Buffer = refineMatte(m, cw, cw, img);
+    expect(out[11 * cw + 11]).toBe(255); // glass kept
+    expect(out[0]).toBe(0);              // background removed
+    expect(out[2 * cw + 28]).toBe(0);    // speck dropped
   });
 
   it('applies the mask as alpha without changing colours', () => {
