@@ -289,7 +289,7 @@ function original(id: number): Promise<Buffer | null> {
 }
 
 /** Bump to make clients and caches fetch freshly rendered images. */
-export const IMAGE_VERSION = 2;
+export const IMAGE_VERSION = 3;
 
 /**
  * Cut out the product with the AI model and encode both sizes as WebP.
