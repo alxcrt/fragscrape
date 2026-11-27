@@ -56,7 +56,7 @@ export function initCatalog(): void {
       ids TEXT NOT NULL,
       fetched_at DATETIME NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE TABLE IF NOT EXISTS image_cache_v2 (
+    CREATE TABLE IF NOT EXISTS image_cache_v3 (
       id INTEGER NOT NULL,
       width INTEGER NOT NULL,
       type TEXT NOT NULL,
@@ -70,8 +70,8 @@ export function initCatalog(): void {
       fetched_at DATETIME NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  // Images from the first pipeline (before AI cut-outs) are rebuilt
-  db.exec('DROP TABLE IF EXISTS image_cache');
+  // Images from earlier pipelines are rebuilt
+  db.exec('DROP TABLE IF EXISTS image_cache; DROP TABLE IF EXISTS image_cache_v2');
   // Similar perfumes for a detail page, as [{ id, similarity }]
   try { db.exec('ALTER TABLE catalog ADD COLUMN similar TEXT'); } catch { /* exists */ }
 }
@@ -189,9 +189,9 @@ export function setList(key: string, ids: number[]): void {
 }
 
 export function getImage(id: number, width: number): { type: string; data: Buffer } | null {
-  return (db.prepare('SELECT type, data FROM image_cache_v2 WHERE id = ? AND width = ?').get(id, width) as { type: string; data: Buffer } | undefined) ?? null;
+  return (db.prepare('SELECT type, data FROM image_cache_v3 WHERE id = ? AND width = ?').get(id, width) as { type: string; data: Buffer } | undefined) ?? null;
 }
 
 export function setImage(id: number, width: number, type: string, data: Buffer): void {
-  db.prepare('INSERT OR REPLACE INTO image_cache_v2 (id, width, type, data) VALUES (?, ?, ?, ?)').run(id, width, type, data);
+  db.prepare('INSERT OR REPLACE INTO image_cache_v3 (id, width, type, data) VALUES (?, ?, ?, ?)').run(id, width, type, data);
 }
