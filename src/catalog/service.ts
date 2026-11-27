@@ -5,7 +5,7 @@ import parfumoScraper from '../scrapers/parfumoScraper';
 import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
-import { whiteBorderRatio, applyMatte } from './imageProcess';
+import { whiteBorderRatio, refineMatte, withAlpha } from './imageProcess';
 import { matte } from './imageAi';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
@@ -291,7 +291,7 @@ function original(id: number): Promise<Buffer | null> {
 }
 
 /** Bump to make clients and caches fetch freshly rendered images. */
-export const IMAGE_VERSION = 3;
+export const IMAGE_VERSION = 4;
 
 /**
  * Cut out the product with the AI model and encode both sizes as WebP.
@@ -309,7 +309,7 @@ async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | 
   if (whiteBorderRatio(data, info.width, info.height) >= 0.5) {
     const alpha = await matte(source, info.width, info.height);
     if (!alpha) return null;
-    rgba = applyMatte(data, alpha);
+    rgba = withAlpha(data, refineMatte(alpha, info.width, info.height, data));
   }
   return encode(rgba, info.width, info.height);
 }
