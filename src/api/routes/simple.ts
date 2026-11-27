@@ -22,7 +22,8 @@ const autocompleteQuery = z.object({
 router.get('/autocomplete', validate({ query: autocompleteQuery }), asyncHandler(async (req: Request, res: Response) => {
   const { q, limit } = req.query as unknown as { q: string; limit: number };
   const ranked = await service.autocomplete(q, limit);
-  service.prefetchImages(ranked.map((r) => r.row.id));
+  // Keystrokes are frequent: prepare only the top suggestions' images ahead of time
+  service.prefetchImages(ranked.slice(0, 3).map((r) => r.row.id));
   return sendSuccess(res, ranked.map((r) => service.toItem(r.row, baseUrl(req))));
 }));
 

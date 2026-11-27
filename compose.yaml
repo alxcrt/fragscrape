@@ -36,7 +36,7 @@ services:
       RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1500}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       BG_MODEL: ${BG_MODEL:-isnet}
-      BG_MODEL_THREADS: ${BG_MODEL_THREADS:-3}
+      BG_MODEL_THREADS: ${BG_MODEL_THREADS:-2}
       # Read-only root: Chromium keeps its profile/crash data under /tmp
       HOME: /tmp
       XDG_CONFIG_HOME: /tmp/.config

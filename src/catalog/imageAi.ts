@@ -36,7 +36,7 @@ async function load(): Promise<void> {
   try {
     ort = await import('onnxruntime-node');
     session = await ort.InferenceSession.create(file, {
-      intraOpNumThreads: parseInt(process.env.BG_MODEL_THREADS || '3', 10),
+      intraOpNumThreads: parseInt(process.env.BG_MODEL_THREADS || '2', 10),
       graphOptimizationLevel: 'all',
     });
     logger.info(`Background model loaded: ${modelName}`);
