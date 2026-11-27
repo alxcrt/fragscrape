@@ -188,7 +188,7 @@ export const openapiSpec = {
           variant: { type: 'string', example: 'Extrait de Parfum', description: 'Concentration or edition when several share a name' },
           year: { type: 'integer', example: 2017 },
           gender: { type: 'string', enum: ['male', 'female', 'unisex'] },
-          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=4' },
+          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=5' },
           rating: { type: 'number', description: 'Average rating, 0-10', example: 8.2 },
           votes: { type: 'integer', description: 'Number of ratings', example: 3408 },
         },
@@ -199,7 +199,7 @@ export const openapiSpec = {
           {
             type: 'object',
             properties: {
-              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=4' },
+              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=5' },
               description: { type: 'string' },
               perfumer: { type: 'string', example: 'Francis Kurkdjian' },
               notes: {

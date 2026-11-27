@@ -6,7 +6,7 @@ import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
 import { whiteBorderRatio, refineMatte, withAlpha } from './imageProcess';
-import { matte } from './imageAi';
+import { matte, maskNeedsRefine } from './imageAi';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
 import { identityTokens, normalizeText, searchPhrase } from './normalize';
@@ -291,7 +291,7 @@ function original(id: number): Promise<Buffer | null> {
 }
 
 /** Bump to make clients and caches fetch freshly rendered images. */
-export const IMAGE_VERSION = 4;
+export const IMAGE_VERSION = 5;
 
 /**
  * Cut out the product with the AI model and encode both sizes as WebP.
@@ -309,7 +309,7 @@ async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | 
   if (whiteBorderRatio(data, info.width, info.height) >= 0.5) {
     const alpha = await matte(source, info.width, info.height);
     if (!alpha) return null;
-    rgba = withAlpha(data, refineMatte(alpha, info.width, info.height, data));
+    rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : alpha);
   }
   return encode(rgba, info.width, info.height);
 }
@@ -384,7 +384,8 @@ export function prefetchImages(ids: number[]): void {
   for (const id of ids) enqueueImage(id, 'later');
 }
 
-const WAIT_MS = 15000;
+// The product model takes ~20-35 s on CPU the first time an image is requested
+const WAIT_MS = 40000;
 
 /**
  * Image for a catalog id. A first request waits for the AI cut-out (once per
