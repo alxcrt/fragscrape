@@ -1,4 +1,4 @@
-import { normalizeText, tokenize, identityTokens } from '../../src/catalog/normalize';
+import { normalizeText, tokenize, identityTokens, searchPhrase } from '../../src/catalog/normalize';
 import { scoreCandidate, editDistance } from '../../src/catalog/matcher';
 
 const aventus = { brand: 'Creed', name: 'Aventus', votes: 8900 };
@@ -20,6 +20,22 @@ describe('normalize', () => {
 
   it('expands concentration abbreviations', () => {
     expect(tokenize('Sauvage EDT')).toEqual(['sauvage', 'eau', 'de', 'toilette']);
+  });
+
+  it('builds live search phrases from the words as written', () => {
+    expect(searchPhrase('CK One')).toBe('ck one');
+    expect(searchPhrase('Not a Perfume')).toBe('not a perfume');
+    expect(searchPhrase('CREED AVENTUS eau de parfum 100ml vaporisateur spray')).toBe('creed aventus');
+    expect(searchPhrase('Sauvage EDT')).toBe('sauvage');
+  });
+
+  it('maps number words to digits', () => {
+    expect(tokenize('One Million')).toEqual(['1', 'million']);
+  });
+
+  it('keeps weak name words for live lookups', () => {
+    expect(identityTokens('Mon Paris')).toEqual(['mon', 'paris']);
+    expect(identityTokens('Not a Perfume')).toEqual(['not', 'perfume']);
   });
 
   it('keeps only identity words for live lookups', () => {
@@ -57,6 +73,13 @@ describe('scoreCandidate', () => {
 
   it('handles words merged by OCR', () => {
     expect(scoreCandidate('maison francis kurkdjian baccaratrouge 540', br540Edp, 'match')).toBeGreaterThan(0.75);
+  });
+
+  it('prefers names containing weak words when they were typed', () => {
+    const monParis = { brand: 'Yves Saint Laurent', name: 'Mon Paris', votes: 2000 };
+    const monGuerlain = { brand: 'Guerlain', name: 'Mon Guerlain', votes: 3000 };
+    expect(scoreCandidate('mon paris', monParis, 'autocomplete')).toBeGreaterThan(scoreCandidate('mon paris', monGuerlain, 'autocomplete'));
+    expect(scoreCandidate('one million paco', { brand: 'Rabanne', name: '1 Million', votes: 5000 }, 'match')).toBeGreaterThan(0.55);
   });
 
   it('gives unrelated text a low score', () => {

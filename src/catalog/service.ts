@@ -9,7 +9,7 @@ import { whiteBorderRatio, applyMatte } from './imageProcess';
 import { matte } from './imageAi';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
-import { identityTokens, normalizeText } from './normalize';
+import { identityTokens, normalizeText, searchPhrase } from './normalize';
 import {
   ListingItem, searchSource, rankingSource, brandSource, parseSimilar, parseDetailExtras, fetchHtml,
   perfumeUrl, imagePathFromSrc, imageUrl, mediaKeyFromSrc,
@@ -79,8 +79,8 @@ async function liveLookup(phrase: string): Promise<number> {
 export async function autocomplete(q: string, limit: number): Promise<Ranked[]> {
   let ranked = rankLocal(q, 'autocomplete', limit);
   const words = identityTokens(q);
-  const phrase = words.join(' ');
-  if (phrase.length < 3) return ranked;
+  const phrase = searchPhrase(q);
+  if (phrase.length < 3 || words.length === 0) return ranked;
 
   const lookup = async () => {
     const found = await liveLookup(phrase);
@@ -113,6 +113,8 @@ export async function match(text: string, limit: number): Promise<Ranked[]> {
 
   const words = identityTokens(text).slice(0, 8);
   const attempts: string[] = [];
+  const phrase = searchPhrase(text);
+  if (phrase) attempts.push(phrase);
   if (words.length > 0) attempts.push(words.join(' '));
   for (let i = 0; i + 1 < words.length && attempts.length < 5; i++) attempts.push(`${words[i]} ${words[i + 1]}`);
   for (const w of [...words].sort((a, b) => b.length - a.length)) {
