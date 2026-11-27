@@ -394,6 +394,30 @@ Server-specific settings:
 | `PARFUMO_AUTH_ENABLED` | Parfumo account features (login, collection, ratings, reviews, sync push/pull) need a visible browser. Set `false` on headless servers to return `503` for those routes | `false` |
 | `LOG_CONSOLE_LEVEL` | Console log level in production | `info` |
 | `FRAGSCRAPE_BIND` | Compose host binding for port 3000 | `100.84.38.28:13300` |
+| `LEGACY_API` | Keep the original endpoints (search, saved queries, tags, account sync). `false` serves only the simple API | `true` (`false` in `compose.yaml`) |
+| `PUBLIC_URL` | Base URL used for image links in responses | request host |
+| `BG_MODEL` | Background removal model: `isnet` (ISNet general-use, Apache-2.0) or `birefnet` (BiRefNet, MIT; ~5x slower, ~7-10 GB RAM) | `isnet` |
+| `BG_MODEL_DIR` / `BG_MODEL_THREADS` | Model folder and CPU threads for background removal | `/app/models` / `3` |
+
+### Simple API
+
+A fast, source-neutral API backed by a local SQLite catalog that grows with every lookup:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/autocomplete?q=` | Suggestions while typing (prefix and typo tolerant, popular first) |
+| `GET/POST /api/match` | Best match for noisy text, e.g. a label read from a photo, with confidence |
+| `GET /api/perfumes/{id}` | Details: notes, accords, ratings, perfumer, similar perfumes |
+| `GET /api/brands/{name}` | Perfumes by brand |
+| `GET /api/rankings?category=` | Top-rated perfumes |
+| `GET /images/{id}.webp?size=small\|large` | Optimised WebP images (public, cached) |
+
+Answers come from the local catalog first; only missing data is fetched live (plain HTTP, browser fallback),
+then stored. Details and lists are served from storage and refreshed in the background when old.
+
+Images are served from this API as WebP (240 px and 720 px). White studio backgrounds are removed with an
+AI segmentation model (ONNX Runtime, CPU) in a background queue; until an image is processed, a quick
+edge-based cut-out is returned with a short cache lifetime, then the final version is cached permanently.
 
 `GET /health` stays unauthenticated for container health checks. Interactive API docs (Swagger UI) are at `/docs`, and the OpenAPI spec at `/openapi.json`; both are public, but requests made from the docs page still need a key (**Authorize**).
 

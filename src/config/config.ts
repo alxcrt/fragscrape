@@ -13,6 +13,8 @@ const configSchema = z.object({
     trustProxy: z.union([z.boolean(), z.number(), z.string()]),
     apiKeys: z.array(z.string().min(16, 'API keys must be at least 16 characters')),
     requireApiKey: z.boolean(),
+    publicUrl: z.string(),
+    legacyApi: z.boolean(),
   }),
   database: z.object({
     path: z.string(),
@@ -68,6 +70,9 @@ const config: Config = {
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     apiKeys: (process.env.API_KEYS || '').split(',').map((k) => k.trim()).filter(Boolean),
     requireApiKey: process.env.REQUIRE_API_KEY === 'true',
+    publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+    // The original endpoints (search, saved queries, tags, account sync); off for the simple API only
+    legacyApi: process.env.LEGACY_API !== 'false',
   },
   database: {
     path: process.env.DATABASE_PATH || './data/fragscrape.db',

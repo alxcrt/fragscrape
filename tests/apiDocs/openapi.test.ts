@@ -4,25 +4,23 @@ describe('openapi spec', () => {
   const text = JSON.stringify(openapiSpec).toLowerCase();
 
   it('does not name any upstream data source', () => {
-    for (const word of ['parfumo', 'fragrantica', 'decodo', 'scraping']) {
-      expect(text).not.toContain(word);
-    }
+    for (const word of ['parfumo', 'fragrantica', 'decodo', 'scraping']) expect(text).not.toContain(word);
   });
 
-  it('documents the public routes and no account routes', () => {
-    const paths = Object.keys(openapiSpec.paths);
-    expect(paths).toEqual(expect.arrayContaining(['/health', '/api/search', '/api/perfume/{brand}/{name}', '/api/rankings', '/api/queries']));
-    expect(paths.some((p) => p.startsWith('/api/auth') || p.startsWith('/api/parfumo') || p.startsWith('/api/sync') || p.startsWith('/api/proxy'))).toBe(false);
+  it('documents the simple API only', () => {
+    expect(Object.keys(openapiSpec.paths).sort()).toEqual([
+      '/api/autocomplete', '/api/brands/{name}', '/api/match', '/api/perfumes/{id}', '/api/rankings', '/health', '/images/{id}.webp',
+    ]);
   });
 
-  it('declares API key auth and leaves /health open', () => {
+  it('declares API key auth and leaves health and images open', () => {
     expect(openapiSpec.components.securitySchemes.ApiKey).toMatchObject({ in: 'header', name: 'X-API-Key' });
     expect((openapiSpec.paths['/health'].get as any).security).toEqual([]);
+    expect((openapiSpec.paths['/images/{id}.webp'].get as any).security).toEqual([]);
   });
 
   it('only references components that exist', () => {
-    const refs = [...JSON.stringify(openapiSpec).matchAll(/"#\/components\/(\w+)\/(\w+)"/g)];
-    for (const [, kind, name] of refs) {
+    for (const [, kind, name] of JSON.stringify(openapiSpec).matchAll(/"#\/components\/(\w+)\/(\w+)"/g)) {
       expect((openapiSpec.components as any)[kind][name]).toBeDefined();
     }
   });

@@ -23,6 +23,9 @@ import { apiKeyAuth } from './api/middleware/apiKeyAuth';
 import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
 import browserClient from './proxy/browserClient';
 import swaggerUi from 'swagger-ui-express';
+import simpleRoutes, { imagesRouter } from './api/routes/simple';
+import { initCatalog } from './catalog/catalog';
+import { seed as seedCatalog } from './catalog/service';
 import { openapiSpec } from './apiDocs/openapi';
 
 const app = express();
@@ -43,6 +46,7 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiSpec, {
   swaggerOptions: { persistAuthorization: true, tryItOutEnabled: true },
 }));
 app.get('/', (_req, res) => res.redirect('/docs'));
+app.use('/images', imagesRouter);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -90,27 +94,32 @@ app.get('/health', (_req, res) => {
   }
 });
 
-// API routes
-app.use('/api', perfumeRoutes);
-app.use('/api/proxy', proxyRoutes);
-app.use('/api/queries', queryRoutes);
-app.use('/api/perfumes', perfumeDataRoutes);
-app.use('/api/collection', collectionRouter);
-app.use('/api/tags', tagsRouter);
-app.use('/api/cleanup', cleanupRouter);
-// Parfumo account features need a visible browser; refuse them cleanly on headless servers
-app.use('/api/auth/login', requireParfumoAuthEnabled);
-app.use('/api/auth/status', requireParfumoAuthEnabled);
-app.use('/api/parfumo', requireParfumoAuthEnabled);
-app.use('/api/sync/push', requireParfumoAuthEnabled);
-app.use('/api/sync/pull', requireParfumoAuthEnabled);
-app.use('/api/auth', authRoutes);
-app.use('/api/parfumo/collection', parfumoCollectionRoutes);
-app.use('/api/parfumo/rating', parfumoRatingRoutes);
-app.use('/api/parfumo/reviews', parfumoReviewRoutes);
-app.use('/api/sync', syncRoutes);
-app.use('/api', rankingsRoutes);
-app.use('/api/cache', cacheRoutes);
+// Simple API (autocomplete, match, perfume details, brands, rankings)
+app.use('/api', simpleRoutes);
+
+// Original endpoints, kept for compatibility unless LEGACY_API=false
+if (config.api.legacyApi) {
+  app.use('/api', perfumeRoutes);
+  app.use('/api/proxy', proxyRoutes);
+  app.use('/api/queries', queryRoutes);
+  app.use('/api/perfumes', perfumeDataRoutes);
+  app.use('/api/collection', collectionRouter);
+  app.use('/api/tags', tagsRouter);
+  app.use('/api/cleanup', cleanupRouter);
+  // Parfumo account features need a visible browser; refuse them cleanly on headless servers
+  app.use('/api/auth/login', requireParfumoAuthEnabled);
+  app.use('/api/auth/status', requireParfumoAuthEnabled);
+  app.use('/api/parfumo', requireParfumoAuthEnabled);
+  app.use('/api/sync/push', requireParfumoAuthEnabled);
+  app.use('/api/sync/pull', requireParfumoAuthEnabled);
+  app.use('/api/auth', authRoutes);
+  app.use('/api/parfumo/collection', parfumoCollectionRoutes);
+  app.use('/api/parfumo/rating', parfumoRatingRoutes);
+  app.use('/api/parfumo/reviews', parfumoReviewRoutes);
+  app.use('/api/sync', syncRoutes);
+  app.use('/api', rankingsRoutes);
+  app.use('/api/cache', cacheRoutes);
+}
 
 // Error handlers
 app.use(notFoundHandler);
@@ -155,6 +164,8 @@ const startServer = async () => {
     }
 
     await database.initialize();
+    initCatalog();
+    void seedCatalog();
 
     if (!isProxyConfigured()) {
       logger.warn('DECODO_PROXY_URL is not set - scraping will use direct connections (no proxy)');

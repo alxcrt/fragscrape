@@ -159,6 +159,43 @@ class ParfumoScraper {
       const nameSlug = fullUrl.split('/')[5];
       await saveDebugHtml(`live_${brandSlug}_${nameSlug}`, html);
 
+      const perfume = this.parseDetailsHtml(html, fullUrl);
+      const $ = cheerio.load(html);
+      const similarFragrances = perfume.similarFragrances ?? [];
+
+      // Extract real Parfumo URLs by clicking each similar item's sneakpeek popup
+      try {
+        const urlMap = await browserClient.extractSimilarFragUrls();
+        if (urlMap.size > 0) {
+          const simItems = $('.sim_item').toArray();
+          for (let i = 0; i < Math.min(simItems.length, similarFragrances.length); i++) {
+            const $item = $(simItems[i]);
+            const dataId = $item.attr('data-s_id') || $item.attr('data-p_id') || '';
+            if (dataId && urlMap.has(dataId)) {
+              similarFragrances[i].url = urlMap.get(dataId);
+            }
+          }
+          logger.info(`Extracted ${urlMap.size} similar frag URLs`);
+        }
+      } catch (err: any) {
+        logger.warn(`Could not extract similar frag URLs: ${err.message}`);
+      }
+
+      const { brand, name } = perfume;
+      logger.info(`Successfully scraped: ${brand} - ${name}`);
+      return perfume;
+    } catch (error) {
+      logger.error(`Failed to fetch perfume details from ${url}:`, error);
+      throw error;
+    }
+  }
+
+
+  /**
+   * Parse a perfume detail page. Works on HTML from plain HTTP or the browser;
+   * similar-fragrance links are only added by the browser path.
+   */
+  parseDetailsHtml(html: string, fullUrl: string): Perfume {
       const $ = cheerio.load(html);
 
       detectErrorPage($, fullUrl);
@@ -195,7 +232,7 @@ class ParfumoScraper {
         logger.warn(`⚠️  Rating extraction failed`);
         logger.warn(`Missing ratings: ${!ratings.longevity ? 'longevity ' : ''}${!ratings.sillage ? 'sillage ' : ''}${!ratings.bottle ? 'bottle ' : ''}${!ratings.priceValue ? 'priceValue' : ''}`);
 
-        await saveDebugHtml(`failed_${brandSlug}_${nameSlug}`, html);
+        void saveDebugHtml(`failed_${fullUrl.split('/')[4]}_${fullUrl.split('/')[5]}`, html);
       }
 
       // Extract image
@@ -203,24 +240,6 @@ class ParfumoScraper {
 
       // Extract similar fragrances (names/brands from cheerio, URLs from Puppeteer clicks)
       const similarFragrances = this.htmlExtractor.extractSimilarFragrances($, LIMITS.MAX_SIMILAR_FRAGRANCES);
-
-      // Extract real Parfumo URLs by clicking each similar item's sneakpeek popup
-      try {
-        const urlMap = await browserClient.extractSimilarFragUrls();
-        if (urlMap.size > 0) {
-          const simItems = $('.sim_item').toArray();
-          for (let i = 0; i < Math.min(simItems.length, similarFragrances.length); i++) {
-            const $item = $(simItems[i]);
-            const dataId = $item.attr('data-s_id') || $item.attr('data-p_id') || '';
-            if (dataId && urlMap.has(dataId)) {
-              similarFragrances[i].url = urlMap.get(dataId);
-            }
-          }
-          logger.info(`Extracted ${urlMap.size} similar frag URLs`);
-        }
-      } catch (err: any) {
-        logger.warn(`Could not extract similar frag URLs: ${err.message}`);
-      }
 
       // Extract community stats
       const communityStats = this.htmlExtractor.extractCommunityStats($);
@@ -234,7 +253,7 @@ class ParfumoScraper {
       // Extract production status
       const productionStatus = this.htmlExtractor.extractProductionStatus($);
 
-      const perfume: Perfume = {
+      return {
         name,
         brand,
         year,
@@ -266,12 +285,6 @@ class ParfumoScraper {
         scrapedAt: new Date(),
       };
 
-      logger.info(`Successfully scraped: ${brand} - ${name}`);
-      return perfume;
-    } catch (error) {
-      logger.error(`Failed to fetch perfume details from ${url}:`, error);
-      throw error;
-    }
   }
 
   /**

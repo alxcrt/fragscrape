@@ -12,6 +12,11 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
+FROM node:22-bookworm-slim AS model
+# ISNet general-use (Apache-2.0) for background removal, pinned by checksum
+ADD --chmod=644 --checksum=sha256:60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a \
+  https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx /models/isnet-general-use.onnx
+
 FROM node:22-bookworm-slim
 WORKDIR /app
 # System Chromium for headless scraping; dumb-init reaps Chrome child processes
@@ -26,7 +31,9 @@ ENV NODE_ENV=production \
     PARFUMO_AUTH_ENABLED=false \
     TRUST_PROXY=1 \
     REQUIRE_API_KEY=true \
-    LOG_CONSOLE_LEVEL=info
+    LOG_CONSOLE_LEVEL=info \
+    BG_MODEL_DIR=/app/models
+COPY --from=model /models /app/models
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
