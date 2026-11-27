@@ -5,8 +5,8 @@ import parfumoScraper from '../scrapers/parfumoScraper';
 import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
-import { removeWhiteBackground, whiteBorderRatio, applyMatte } from './imageProcess';
-import { matte, aiAvailable } from './imageAi';
+import { whiteBorderRatio, applyMatte } from './imageProcess';
+import { matte } from './imageAi';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
 import { identityTokens, normalizeText } from './normalize';
@@ -33,7 +33,7 @@ export function toItem(row: CatalogRow, baseUrl: string): Item {
   if (row.variant) item.variant = row.variant;
   if (row.year) item.year = row.year;
   if (row.gender) item.gender = row.gender;
-  if (row.image) item.image = `${baseUrl}/images/${row.id}.webp`;
+  if (row.image) item.image = `${baseUrl}/images/${row.id}.webp?v=${IMAGE_VERSION}`;
   if (row.rating) item.rating = row.rating;
   if (row.votes) item.votes = row.votes;
   return item;
@@ -214,7 +214,7 @@ export async function detail(id: number, baseUrl: string): Promise<Detail> {
   }
 
   const out: Detail = { ...toItem(row, baseUrl), similar: [] };
-  if (row.image) out.imageLarge = `${baseUrl}/images/${row.id}.webp?size=large`;
+  if (row.image) out.imageLarge = `${baseUrl}/images/${row.id}.webp?size=large&v=${IMAGE_VERSION}`;
   if (perfume.concentration) out.concentration = perfume.concentration;
   if (perfume.description) out.description = perfume.description;
   if (perfume.perfumer) out.perfumer = perfume.perfumer;
@@ -288,11 +288,14 @@ function original(id: number): Promise<Buffer | null> {
   return task;
 }
 
+/** Bump to make clients and caches fetch freshly rendered images. */
+export const IMAGE_VERSION = 2;
+
 /**
- * Cut out the product (AI when available) and encode both sizes as WebP.
- * final = no cut-out was needed or the AI did it; quick edge-based cut-outs are not final.
+ * Cut out the product with the AI model and encode both sizes as WebP.
+ * Returns null when a white-background image could not be cut out (no model).
  */
-async function renderImage(source: Buffer, useAi: boolean): Promise<{ sizes: Record<ImageSize, Buffer>; final: boolean }> {
+async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | null> {
   const max = IMAGE_SIZES.large;
   const { data, info } = await sharp(source)
     .resize(max, max, { fit: 'inside', withoutEnlargement: true })
@@ -300,31 +303,35 @@ async function renderImage(source: Buffer, useAi: boolean): Promise<{ sizes: Rec
     .raw()
     .toBuffer({ resolveWithObject: true });
   let rgba = data;
-  let final = true;
-  // Only studio shots on a white background get cut out
+  // Only studio shots on a white background get cut out; others are kept as they are
   if (whiteBorderRatio(data, info.width, info.height) >= 0.5) {
-    const alpha = useAi ? await matte(source, info.width, info.height) : null;
-    rgba = alpha ? applyMatte(data, alpha) : removeWhiteBackground(data, info.width, info.height);
-    final = !!alpha;
+    const alpha = await matte(source, info.width, info.height);
+    if (!alpha) return null;
+    rgba = applyMatte(data, alpha);
   }
+  return encode(rgba, info.width, info.height);
+}
+
+async function encode(rgba: Buffer, width: number, height: number): Promise<Record<ImageSize, Buffer>> {
   const out = {} as Record<ImageSize, Buffer>;
   for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
-    out[name] = await sharp(rgba, { raw: { width: info.width, height: info.height, channels: 4 } })
+    out[name] = await sharp(rgba, { raw: { width, height, channels: 4 } })
       .resize(w, w, { fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 85, alphaQuality: 95, effort: 5 })
       .toBuffer();
   }
-  return { sizes: out, final };
+  return out;
 }
 
-/** Background queue for AI cut-outs: requested images first, then prefetched ones. */
+/** Queue for AI cut-outs: requested images first, then prefetched ones. */
 const urgent: number[] = [];
 const later: number[] = [];
 const queued = new Set<number>();
+const waiters = new Map<number, Array<(done: boolean) => void>>();
 let working = false;
 
 function enqueueImage(id: number, priority: 'urgent' | 'later'): void {
-  if (!aiAvailable() || catalog.getImage(id, IMAGE_SIZES.small)) return;
+  if (catalog.getImage(id, IMAGE_SIZES.small)) return;
   if (queued.has(id)) {
     if (priority === 'urgent' && later.includes(id)) {
       later.splice(later.indexOf(id), 1);
@@ -343,19 +350,26 @@ async function drainImages(): Promise<void> {
   working = true;
   try {
     for (let id = urgent.shift() ?? later.shift(); id !== undefined; id = urgent.shift() ?? later.shift()) {
+      let done = false;
       try {
-        if (catalog.getImage(id, IMAGE_SIZES.small)) continue;
+        if (catalog.getImage(id, IMAGE_SIZES.small)) {
+          done = true;
+          continue;
+        }
         const source = await original(id);
-        if (!source) continue;
-        const rendered = await renderImage(source, true);
-        if (!rendered.final) continue;
-        for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
-          catalog.setImage(id, w, 'image/webp', rendered.sizes[name]);
+        const rendered = source ? await renderImage(source) : null;
+        if (rendered) {
+          for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
+            catalog.setImage(id, w, 'image/webp', rendered[name]);
+          }
+          done = true;
         }
       } catch (err) {
         logger.warn(`Image ${id} failed: ${(err as Error).message}`);
       } finally {
         queued.delete(id);
+        for (const resolve of waiters.get(id) ?? []) resolve(done);
+        waiters.delete(id);
       }
     }
   } finally {
@@ -368,11 +382,12 @@ export function prefetchImages(ids: number[]): void {
   for (const id of ids) enqueueImage(id, 'later');
 }
 
-const quick = new Map<string, Buffer>();
+const WAIT_MS = 15000;
 
 /**
- * Image for a catalog id. The final (AI cut-out) version is stored permanently;
- * until it is ready, a quick edge-based cut-out is returned with final=false.
+ * Image for a catalog id. A first request waits for the AI cut-out (once per
+ * image, then stored). If that is not possible in time, the untouched original
+ * is returned with final=false, never a partial cut-out.
  */
 export async function image(id: number, size: ImageSize): Promise<ImageResult | null> {
   const width = IMAGE_SIZES[size];
@@ -381,21 +396,23 @@ export async function image(id: number, size: ImageSize): Promise<ImageResult | 
   const row = catalog.getById(id);
   if (!row?.image) return null;
 
-  enqueueImage(id, 'urgent');
-  const key = `${id}:${size}`;
-  const cached = quick.get(key);
-  if (cached) return { body: cached, type: 'image/webp', final: false };
+  const ready = await new Promise<boolean>((resolve) => {
+    const list = waiters.get(id) ?? [];
+    list.push(resolve);
+    waiters.set(id, list);
+    enqueueImage(id, 'urgent');
+    setTimeout(() => resolve(false), WAIT_MS);
+  });
+  const after = ready ? catalog.getImage(id, width) : null;
+  if (after) return { body: after.data, type: after.type, final: true };
+
   const source = await original(id);
   if (!source) return null;
-  const rendered = await renderImage(source, false);
-  if (rendered.final) {
-    // Nothing to cut out (not a white studio shot): store as is
-    for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) catalog.setImage(id, w, 'image/webp', rendered.sizes[name]);
-    return { body: rendered.sizes[size], type: 'image/webp', final: true };
-  }
-  if (quick.size > 400) quick.clear();
-  for (const [name] of Object.entries(IMAGE_SIZES)) quick.set(`${id}:${name}`, rendered.sizes[name as ImageSize]);
-  return { body: rendered.sizes[size], type: 'image/webp', final: false };
+  const { data, info } = await sharp(source)
+    .resize(IMAGE_SIZES.large, IMAGE_SIZES.large, { fit: 'inside', withoutEnlargement: true })
+    .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const plain = await encode(data, info.width, info.height);
+  return { body: plain[size], type: 'image/webp', final: false };
 }
 
 /** Fill an empty catalog with the most popular perfumes, slowly, in the background. */

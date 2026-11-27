@@ -144,7 +144,7 @@ export const openapiSpec = {
       get: {
         tags: ['Images'],
         summary: 'Perfume image (WebP)',
-        description: 'No API key needed. Long-lived cache headers.',
+        description: 'No API key needed. Background removed by an AI model; the first request for an image can take a few seconds, after that it is cached for a year. Use the URLs returned by the API (they include a version parameter).',
         security: [],
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } },
@@ -188,7 +188,7 @@ export const openapiSpec = {
           variant: { type: 'string', example: 'Extrait de Parfum', description: 'Concentration or edition when several share a name' },
           year: { type: 'integer', example: 2017 },
           gender: { type: 'string', enum: ['male', 'female', 'unisex'] },
-          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp' },
+          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=2' },
           rating: { type: 'number', description: 'Average rating, 0-10', example: 8.2 },
           votes: { type: 'integer', description: 'Number of ratings', example: 3408 },
         },
@@ -199,7 +199,7 @@ export const openapiSpec = {
           {
             type: 'object',
             properties: {
-              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large' },
+              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=2' },
               description: { type: 'string' },
               perfumer: { type: 'string', example: 'Francis Kurkdjian' },
               notes: {

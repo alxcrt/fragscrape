@@ -416,8 +416,9 @@ Answers come from the local catalog first; only missing data is fetched live (pl
 then stored. Details and lists are served from storage and refreshed in the background when old.
 
 Images are served from this API as WebP (240 px and 720 px). White studio backgrounds are removed with an
-AI segmentation model (ONNX Runtime, CPU) in a background queue; until an image is processed, a quick
-edge-based cut-out is returned with a short cache lifetime, then the final version is cached permanently.
+AI segmentation model (ONNX Runtime, CPU). Images shown in results are processed ahead of time; a first
+request waits for the cut-out (a few seconds, once). If the model is unavailable, the untouched original is
+served with a short cache lifetime instead. Image URLs carry a version (`?v=`) that changes with the pipeline.
 
 `GET /health` stays unauthenticated for container health checks. Interactive API docs (Swagger UI) are at `/docs`, and the OpenAPI spec at `/openapi.json`; both are public, but requests made from the docs page still need a key (**Authorize**).
 
