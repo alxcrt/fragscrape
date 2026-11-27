@@ -86,7 +86,8 @@ if (config.api.nodeEnv !== 'production') {
   logger.add(
     new winston.transports.Console({
       format: productionConsoleFormat,
-      level: 'warn', // Only show warnings and errors in production console
+      // Only warnings and errors by default; LOG_CONSOLE_LEVEL=info for container log collectors
+      level: process.env.LOG_CONSOLE_LEVEL || 'warn',
     })
   );
 }
