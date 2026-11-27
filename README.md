@@ -397,7 +397,7 @@ Server-specific settings:
 | `LEGACY_API` | Keep the original endpoints (search, saved queries, tags, account sync). `false` serves only the simple API | `true` (`false` in `compose.yaml`) |
 | `PUBLIC_URL` | Base URL used for image links in responses | request host |
 | `BG_MODEL` | Background removal model: `isnet` (ISNet general-use, Apache-2.0) or `birefnet` (BiRefNet, MIT; ~5x slower, ~7-10 GB RAM) | `isnet` |
-| `BG_MODEL_DIR` / `BG_MODEL_THREADS` | Model folder and CPU threads for background removal | `/app/models` / `3` |
+| `BG_MODEL_DIR` / `BG_MODEL_THREADS` | Model folder and CPU threads for background removal | `/app/models` / `2` |
 
 ### Simple API
 
