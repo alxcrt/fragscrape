@@ -395,7 +395,7 @@ Server-specific settings:
 | `LOG_CONSOLE_LEVEL` | Console log level in production | `info` |
 | `FRAGSCRAPE_BIND` | Compose host binding for port 3000 | `100.84.38.28:13300` |
 
-`GET /health` stays unauthenticated for container health checks.
+`GET /health` stays unauthenticated for container health checks. Interactive API docs (Swagger UI) are at `/docs`, and the OpenAPI spec at `/openapi.json`; both are public, but requests made from the docs page still need a key (**Authorize**).
 
 ```bash
 curl -H "X-API-Key: $KEY" "https://your-host/api/search?q=Aventus&limit=5"
