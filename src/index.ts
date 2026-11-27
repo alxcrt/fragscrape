@@ -19,8 +19,14 @@ import cacheRoutes from './api/routes/cache';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
 import { displayStartupBanner } from './utils/banner';
 import { TIMEOUT_CONFIG } from './constants/scraping';
+import { apiKeyAuth } from './api/middleware/apiKeyAuth';
+import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
+import browserClient from './proxy/browserClient';
 
 const app = express();
+
+// Behind a reverse proxy (Caddy/Traefik), use the forwarded client IP for rate limiting
+app.set('trust proxy', config.api.trustProxy);
 
 // Middleware
 app.use(helmet());
@@ -35,6 +41,7 @@ const limiter = rateLimit({
 });
 
 app.use('/api', limiter);
+app.use('/api', apiKeyAuth);
 
 app.get('/health', (_req, res) => {
   try {
@@ -53,6 +60,8 @@ app.get('/health', (_req, res) => {
         readable: `${uptimeHours}h ${uptimeMinutes}m`,
       },
       database: { status: dbOk ? 'ok' : 'error' },
+      parfumoAuth: { enabled: config.parfumo.authEnabled },
+      apiKeyRequired: config.api.apiKeys.length > 0,
       proxy: { configured: isProxyConfigured() },
       memory: {
         heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
@@ -78,6 +87,12 @@ app.use('/api/perfumes', perfumeDataRoutes);
 app.use('/api/collection', collectionRouter);
 app.use('/api/tags', tagsRouter);
 app.use('/api/cleanup', cleanupRouter);
+// Parfumo account features need a visible browser; refuse them cleanly on headless servers
+app.use('/api/auth/login', requireParfumoAuthEnabled);
+app.use('/api/auth/status', requireParfumoAuthEnabled);
+app.use('/api/parfumo', requireParfumoAuthEnabled);
+app.use('/api/sync/push', requireParfumoAuthEnabled);
+app.use('/api/sync/pull', requireParfumoAuthEnabled);
 app.use('/api/auth', authRoutes);
 app.use('/api/parfumo/collection', parfumoCollectionRoutes);
 app.use('/api/parfumo/rating', parfumoRatingRoutes);
@@ -98,8 +113,9 @@ const gracefulShutdown = async (signal: string) => {
   logger.info(`Received ${signal}, shutting down gracefully...`);
 
   // Stop accepting new requests
-  server?.close(() => {
+  server?.close(async () => {
     try {
+      await browserClient.close().catch((err) => logger.warn('Error closing browser:', err));
       database.close();
 
       logger.info('Graceful shutdown complete');
@@ -120,6 +136,13 @@ const gracefulShutdown = async (signal: string) => {
 // Start server
 const startServer = async () => {
   try {
+    if (config.api.requireApiKey && config.api.apiKeys.length === 0) {
+      throw new Error('REQUIRE_API_KEY=true but API_KEYS is empty; refusing to start an open API');
+    }
+    if (config.api.apiKeys.length === 0) {
+      logger.warn('API_KEYS is not set - /api endpoints are open to anyone who can reach this server');
+    }
+
     await database.initialize();
 
     if (!isProxyConfigured()) {

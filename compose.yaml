@@ -1,0 +1,41 @@
+# Coolify deployment (Docker Compose build pack). The host port binds only to
+# Yoga's Tailscale address; the public HTTPS edge reverse-proxies to it.
+services:
+  fragscrape:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${FRAGSCRAPE_BIND:-100.84.38.28:13300}:3000"
+    expose:
+      - "3000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+      - /app/logs:rw,nosuid,nodev,size=64m,uid=1000,gid=1000
+    shm_size: 256m
+    pids_limit: 512
+    mem_limit: 1g
+    memswap_limit: 1g
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+    environment:
+      NODE_ENV: production
+      API_KEYS: ${API_KEYS:-}
+      REQUIRE_API_KEY: "true"
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      PARFUMO_AUTH_ENABLED: "false"
+      DECODO_PROXY_URL: ${DECODO_PROXY_URL:-}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Read-only root: Chromium keeps its profile/crash data under /tmp
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp/.config
+      XDG_CACHE_HOME: /tmp/.cache
+    volumes:
+      - fragscrape-data:/app/data
+volumes:
+  fragscrape-data:

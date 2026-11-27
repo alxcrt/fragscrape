@@ -375,6 +375,32 @@ fragscrape/
   data/                # SQLite database, Chrome profile
 ```
 
+## Docker / server deployment
+
+The repository includes a `Dockerfile` (Node 22 + system Chromium) and a `compose.yaml`
+for running the API as a hardened, read-only container with a persistent `/app/data` volume.
+
+```bash
+API_KEYS="$(openssl rand -hex 32)" docker compose up -d --build
+```
+
+Server-specific settings:
+
+| Variable | Description | Default (Docker) |
+|----------|-------------|------------------|
+| `API_KEYS` | Comma-separated keys accepted on every `/api/*` request, sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`. Each key must be at least 16 characters. When unset, the API is open. | _(none)_ |
+| `REQUIRE_API_KEY` | Refuse to start when `API_KEYS` is empty | `true` |
+| `TRUST_PROXY` | Express `trust proxy` setting so rate limiting sees the real client IP behind a reverse proxy (`false`, `true`, a hop count, or a subnet list) | `1` |
+| `PARFUMO_AUTH_ENABLED` | Parfumo account features (login, collection, ratings, reviews, sync push/pull) need a visible browser. Set `false` on headless servers to return `503` for those routes | `false` |
+| `LOG_CONSOLE_LEVEL` | Console log level in production | `info` |
+| `FRAGSCRAPE_BIND` | Compose host binding for port 3000 | `100.84.38.28:13300` |
+
+`GET /health` stays unauthenticated for container health checks.
+
+```bash
+curl -H "X-API-Key: $KEY" "https://your-host/api/search?q=Aventus&limit=5"
+```
+
 ## Testing
 
 ```bash

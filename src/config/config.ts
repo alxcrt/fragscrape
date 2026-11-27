@@ -10,6 +10,9 @@ const configSchema = z.object({
   api: z.object({
     port: z.number(),
     nodeEnv: z.enum(['development', 'production', 'test']),
+    trustProxy: z.union([z.boolean(), z.number(), z.string()]),
+    apiKeys: z.array(z.string().min(16, 'API keys must be at least 16 characters')),
+    requireApiKey: z.boolean(),
   }),
   database: z.object({
     path: z.string(),
@@ -37,10 +40,23 @@ const configSchema = z.object({
     loginTimeoutMs: z.number().default(300000),
     actionTimeoutMs: z.number().default(30000),
     sessionVerifyIntervalMs: z.number().default(1800000),
+    authEnabled: z.boolean(),
   }),
 });
 
 export type Config = z.infer<typeof configSchema>;
+
+/**
+ * Parse TRUST_PROXY for Express's 'trust proxy' setting.
+ * Unset/'false' disables it; 'true' trusts all; a number trusts that many hops;
+ * anything else is passed through (e.g. 'loopback', a subnet list).
+ */
+function parseTrustProxy(value: string | undefined): boolean | number | string {
+  if (!value || value === 'false') return false;
+  if (value === 'true') return true;
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  return value;
+}
 
 const config: Config = {
   proxy: {
@@ -49,6 +65,9 @@ const config: Config = {
   api: {
     port: parseInt(process.env.PORT || '3000', 10),
     nodeEnv: (process.env.NODE_ENV as 'development' | 'production' | 'test') || 'development',
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    apiKeys: (process.env.API_KEYS || '').split(',').map((k) => k.trim()).filter(Boolean),
+    requireApiKey: process.env.REQUIRE_API_KEY === 'true',
   },
   database: {
     path: process.env.DATABASE_PATH || './data/fragscrape.db',
@@ -76,6 +95,7 @@ const config: Config = {
     loginTimeoutMs: parseInt(process.env.PARFUMO_LOGIN_TIMEOUT_MS || '300000', 10),
     actionTimeoutMs: parseInt(process.env.PARFUMO_ACTION_TIMEOUT_MS || '30000', 10),
     sessionVerifyIntervalMs: parseInt(process.env.PARFUMO_SESSION_VERIFY_INTERVAL_MS || '1800000', 10),
+    authEnabled: process.env.PARFUMO_AUTH_ENABLED !== 'false',
   },
 };
 
