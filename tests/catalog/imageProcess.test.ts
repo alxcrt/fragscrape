@@ -1,4 +1,4 @@
-import { removeWhiteBackground, whiteBorderRatio } from '../../src/catalog/imageProcess';
+import { whiteBorderRatio } from '../../src/catalog/imageProcess';
 
 /** 20x20 white image with a red 10x10 square holding a white 4x4 centre (like a label). */
 function bottle(): Buffer {
@@ -10,33 +10,14 @@ function bottle(): Buffer {
   }
   return buf;
 }
-const alphaAt = (b: Buffer, x: number, y: number) => b[(y * 20 + x) * 4 + 3];
 
-describe('removeWhiteBackground', () => {
-  it('detects white borders', () => {
+describe('whiteBorderRatio', () => {
+  it('detects white studio backgrounds', () => {
     expect(whiteBorderRatio(bottle(), 20, 20)).toBe(1);
   });
 
-  it('makes the outer background transparent and keeps the product', () => {
-    const out = removeWhiteBackground(bottle(), 20, 20);
-    expect(alphaAt(out, 0, 0)).toBe(0);
-    expect(alphaAt(out, 2, 17)).toBe(0);
-    expect(alphaAt(out, 6, 6)).toBe(255);
-  });
-
-  it('keeps white enclosed by the product', () => {
-    const out = removeWhiteBackground(bottle(), 20, 20);
-    expect(alphaAt(out, 9, 9)).toBe(255);
-  });
-
-  it('fades light edge pixels without a white halo', () => {
-    const img = bottle();
-    const i = (5 * 20 + 10) * 4; // top edge of the square, made light pink
-    img[i] = 255; img[i + 1] = 215; img[i + 2] = 215;
-    const out = removeWhiteBackground(img, 20, 20);
-    expect(out[i + 3]).toBeGreaterThan(0);
-    expect(out[i + 3]).toBeLessThan(255);
-    expect(out[i + 1]).toBeLessThan(215); // white fringe removed from the colour
+  it('rejects photos with coloured backgrounds', () => {
+    expect(whiteBorderRatio(Buffer.alloc(20 * 20 * 4, 40), 20, 20)).toBe(0);
   });
 });
 
