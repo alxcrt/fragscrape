@@ -38,16 +38,17 @@ describe('catalog', () => {
     expect(catalog.recentlyQueried('aventus')).toBe(true);
   });
 
-  it('queues image jobs by priority, oldest first, and gives up after 3 failures', () => {
+  it('queues image jobs by priority, newest first, and gives up after 3 failures', () => {
     catalog.enqueueImageJob(10, 1);
     catalog.enqueueImageJob(11, 1);
     catalog.enqueueImageJob(12, 2);
     expect(catalog.nextImageJob()).toBe(12);
     catalog.finishImageJob(12);
-    catalog.enqueueImageJob(11, 2); // viewed: jumps ahead
-    expect(catalog.nextImageJob()).toBe(11);
-    for (let i = 0; i < 3; i++) catalog.failImageJob(11);
+    expect(catalog.nextImageJob()).toBe(11); // most recent of equal priority
+    catalog.enqueueImageJob(10, 2); // viewed: jumps ahead
     expect(catalog.nextImageJob()).toBe(10);
+    for (let i = 0; i < 3; i++) catalog.failImageJob(10);
+    expect(catalog.nextImageJob()).toBe(11);
     expect(catalog.imageQueueLength()).toBe(1);
   });
 
