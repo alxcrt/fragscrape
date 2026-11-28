@@ -1,0 +1,72 @@
+/**
+ * Integration guide shown at the top of /docs (Markdown) and mirrored in the README.
+ */
+export const integrationGuide = `
+## Integration guide
+
+### 1. Keep the key on your server
+Call this API from your backend (or a server route / edge function) and forward
+results to the browser. Never ship the API key in client-side code. Images under
+\`/images\` are public, so the browser can load them directly.
+
+### 2. Autocomplete
+- Start at **2 characters**, debounce **150–200 ms**, request \`limit=8\`.
+- **Cancel stale requests** (e.g. \`AbortController\`) so an older, slower answer
+  never replaces a newer one. Results are usually ~0.1–0.3 s; a first-time search
+  for something new can take a few seconds while it is looked up and stored.
+- Show \`name\`, \`variant\` (e.g. *Extrait de Parfum*, important when names repeat),
+  \`brand\` and \`year\`, plus the small \`image\`. Results are ranked: the first is the
+  best guess, popular perfumes first.
+- Keyboard: arrow keys move, Enter picks the highlighted (default: first) result.
+
+### 3. Picking a result
+- Store the numeric \`id\` **and** a snapshot of \`name\`, \`brand\`, \`variant\`. If an id
+  ever returns 404 (catalog reset), re-find it with \`/api/match\` using the snapshot.
+- Load full details with \`GET /api/perfumes/{id}\` when the user opens or selects it
+  (notes, accords, ratings, perfumer, similar perfumes). Repeat calls are instant.
+
+### 4. Matching text from a photo or label
+- Send the raw text you have (OCR output, a pasted name) to \`POST /api/match\`;
+  sizes, packaging words, extra words and small typos are fine.
+- Use \`confidence\`: **≥ 0.9** pick automatically, **0.6–0.9** ask the user to
+  confirm (show \`alternatives\`), **below 0.6 / no match** open autocomplete with the
+  text prefilled.
+
+### 5. Images
+- Always use the image URLs exactly as returned; don't build them yourself.
+- Background removal runs once per image in a queue. Until it is done the URL ends
+  in \`&pending=1\` and shows the plain product photo (on its studio background).
+  Pending images are revalidated on every load, so the same URL switches to the
+  cut-out by itself; refreshing item data also returns the final URL.
+- Final images (no \`pending\`) never change: cache them forever.
+- Use \`image\` (240 px) in lists and \`imageLarge\` (720 px) on detail views. Cut-outs
+  are transparent WebP: they work on any background colour.
+- Optional: style pending images differently (e.g. a light card behind them).
+
+### 6. Limits and errors
+- **401** missing/wrong key · **404** unknown id · **429** rate limited (back off and
+  retry; debouncing keeps you well under the limit).
+- Each response is \`{ success, data, timestamp }\`; errors are \`{ success: false, error }\`.
+
+### Example (TypeScript, server side)
+\`\`\`ts
+const BASE = 'https://fragrance.alexcretu.com';
+const headers = { 'X-API-Key': process.env.FRAGRANCE_API_KEY! };
+
+export async function suggest(q: string, signal?: AbortSignal) {
+  if (q.trim().length < 2) return [];
+  const res = await fetch(\`\${BASE}/api/autocomplete?q=\${encodeURIComponent(q)}&limit=8\`, { headers, signal });
+  return (await res.json()).data as Array<{ id: number; name: string; brand: string; variant?: string; year?: number; image?: string }>;
+}
+
+export async function matchLabel(text: string) {
+  const res = await fetch(\`\${BASE}/api/match\`, {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+  });
+  const { match, alternatives } = (await res.json()).data;
+  if (match?.confidence >= 0.9) return { pick: match };
+  if (match) return { confirm: [match, ...alternatives] };
+  return { search: text };
+}
+\`\`\`
+`;

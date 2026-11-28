@@ -2,6 +2,8 @@
  * OpenAPI 3 description of the API, served at /openapi.json and rendered
  * with Swagger UI at /docs.
  */
+import { integrationGuide } from './guide';
+
 const ok = (schema: object, description = 'Success') => ({
   description,
   content: {
@@ -50,7 +52,7 @@ export const openapiSpec = {
       '**IDs:** every perfume has a numeric `id`; use it with `/api/perfumes/{id}` and `/images/{id}.webp`.',
       '',
       'Responses use `{ success, data, timestamp }`; errors return `{ success: false, error, timestamp }`.',
-    ].join('\n'),
+    ].join('\n') + '\n' + integrationGuide,
   },
   security: [{ ApiKey: [] }, { Bearer: [] }],
   tags: [
