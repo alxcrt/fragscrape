@@ -64,6 +64,18 @@ export function initCatalog(): void {
       fetched_at DATETIME NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (id, width)
     );
+    CREATE TABLE IF NOT EXISTS image_jobs (
+      id INTEGER PRIMARY KEY,
+      priority INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      added_at DATETIME NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS image_plain (
+      id INTEGER NOT NULL,
+      width INTEGER NOT NULL,
+      data BLOB NOT NULL,
+      PRIMARY KEY (id, width)
+    );
     CREATE TABLE IF NOT EXISTS live_queries (
       query TEXT PRIMARY KEY,
       result_count INTEGER NOT NULL,
@@ -194,4 +206,44 @@ export function getImage(id: number, width: number): { type: string; data: Buffe
 
 export function setImage(id: number, width: number, type: string, data: Buffer): void {
   db.prepare('INSERT OR REPLACE INTO image_cache_v4 (id, width, type, data) VALUES (?, ?, ?, ?)').run(id, width, type, data);
+}
+
+/** Whether the final (background removed) image is stored. */
+export function hasFinalImage(id: number, width: number): boolean {
+  return !!db.prepare('SELECT 1 FROM image_cache_v4 WHERE id = ? AND width = ?').get(id, width);
+}
+
+export function getPlainImage(id: number, width: number): Buffer | null {
+  const row = db.prepare('SELECT data FROM image_plain WHERE id = ? AND width = ?').get(id, width) as { data: Buffer } | undefined;
+  return row?.data ?? null;
+}
+
+export function setPlainImage(id: number, width: number, data: Buffer): void {
+  db.prepare('INSERT OR REPLACE INTO image_plain (id, width, data) VALUES (?, ?, ?)').run(id, width, data);
+}
+
+/** Queue an image job; a higher priority wins when it is already queued. */
+export function enqueueImageJob(id: number, priority: number): void {
+  db.prepare(`
+    INSERT INTO image_jobs (id, priority) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET priority = MAX(priority, excluded.priority)
+  `).run(id, priority);
+}
+
+/** Next job: highest priority first, then oldest; jobs that failed 3 times are skipped. */
+export function nextImageJob(): number | null {
+  const row = db.prepare('SELECT id FROM image_jobs WHERE attempts < 3 ORDER BY priority DESC, added_at ASC LIMIT 1').get() as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+export function finishImageJob(id: number): void {
+  db.prepare('DELETE FROM image_jobs WHERE id = ?').run(id);
+}
+
+export function failImageJob(id: number): void {
+  db.prepare('UPDATE image_jobs SET attempts = attempts + 1 WHERE id = ?').run(id);
+}
+
+export function imageQueueLength(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM image_jobs WHERE attempts < 3').get() as { n: number }).n;
 }
