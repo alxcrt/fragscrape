@@ -44,6 +44,7 @@ describe('toItem image state', () => {
     const ready = toItem(catalog.getById(withImage)!, 'https://h');
     expect(ready).toMatchObject({ imageStatus: 'ready', imageBounds: { x: 0.1, y: 0.05, w: 0.8, h: 0.9 } });
     expect(ready.image).not.toContain('pending');
+    expect(ready.image).toMatch(/&t=\d+$/);
     expect(ready.imageUpdatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 

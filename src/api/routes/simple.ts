@@ -149,7 +149,7 @@ imagesRouter.get('/:id.:ext(webp|jpg)', asyncHandler(async (req: Request, res: R
   // Plain photo while the cut-out is queued: browsers must revalidate (ETag) every time,
   // so the same URL shows the cut-out as soon as it is ready; edge caches skip it
   res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'no-cache');
-  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${size}"`);
+  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${size}-${req.query.t ?? ''}"`);
   if (req.fresh) return res.status(304).end();
   return res.send(img.body);
 }));

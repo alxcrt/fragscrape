@@ -6,15 +6,15 @@ import logger from '../utils/logger';
  * AI background removal (salient object segmentation) with ONNX Runtime.
  * Default: BRIA RMBG-2.0 (CC BY-NC 4.0, non-commercial). Trained on product photos:
  * the only model that kept every clear-glass wall, cap and gap right in our tests.
- * Heavy: ~8 GB RAM; the INT8 build (quantized in the Docker build) takes ~8-15 s per
- * image on CPU instead of ~15-35 s. Images are processed once and stored.
+ * Heavy: ~9 GB RAM, ~15-25 s per image on CPU; images are processed once and stored.
+ * Full precision on purpose: INT8 quantization notched clear-glass edges.
  * BG_MODEL=isnet (ISNet general-use, Apache-2.0, ~1.5 GB, ~2 s) is the light fallback.
  */
 interface ModelConfig { file: string; mean: number[]; std: number[]; sigmoid: boolean; refine: boolean }
 
 const MODELS: Record<string, ModelConfig> = {
   // Product-trained (BiRefNet architecture); its mask is used as-is, like rembg does
-  bria: { file: 'bria-rmbg-2.0-int8.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: false, refine: false },
+  bria: { file: 'bria-rmbg-2.0.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: false, refine: false },
   // Lighter fallbacks; their masks need refineMatte (clear glass, haze)
   isnet: { file: 'isnet-general-use.onnx', mean: [0.5, 0.5, 0.5], std: [1, 1, 1], sigmoid: false, refine: true },
   birefnet: { file: 'BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx', mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], sigmoid: true, refine: true },
@@ -58,6 +58,11 @@ async function load(): Promise<void> {
 
 export function aiAvailable(): boolean {
   return !unavailable;
+}
+
+/** Identifies renders made by the active model; images from another model get re-rendered. */
+export function modelId(): string {
+  return modelName;
 }
 
 /** Whether the active model's mask needs post-processing (refineMatte). */

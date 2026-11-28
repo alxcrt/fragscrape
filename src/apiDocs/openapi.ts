@@ -2,7 +2,7 @@
  * OpenAPI 3 description of the API, served at /openapi.json and rendered
  * with Swagger UI at /docs.
  */
-import { integrationGuide } from './guide';
+import { integrationGuide, API_VERSION } from './guide';
 
 const ok = (schema: object, description = 'Success') => ({
   description,
@@ -41,7 +41,7 @@ export const openapiSpec = {
   openapi: '3.0.3',
   info: {
     title: 'Fragrance API',
-    version: '2.0.0',
+    version: API_VERSION,
     description: [
       'Find perfumes fast: autocomplete while typing, match messy text (for example a label read from a photo),',
       'and get details with notes, accords, ratings and similar perfumes.',
@@ -216,7 +216,7 @@ export const openapiSpec = {
           variant: { type: 'string', example: 'Extrait de Parfum', description: 'Concentration or edition when several share a name' },
           year: { type: 'integer', example: 2017 },
           gender: { type: 'string', enum: ['male', 'female', 'unisex'] },
-          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=6', description: '240 px image URL; use as returned' },
+          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=7&t=1795830000', description: '240 px image URL; use as returned' },
           imageStatus: { type: 'string', enum: ['ready', 'pending', 'none'], description: 'ready = background removed (final); pending = plain photo until processed; none = no image' },
           imageVersion: { type: 'integer', example: 6, description: 'Changes when every image is re-rendered; re-mirror stored copies with an older version' },
           imageBounds: {
@@ -234,8 +234,8 @@ export const openapiSpec = {
           {
             type: 'object',
             properties: {
-              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=6', description: '720 px' },
-              imageXl: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=xl&v=6', description: 'Up to 1440 px (never upscaled beyond the source)' },
+              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=7&t=1795830000', description: '720 px' },
+              imageXl: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=xl&v=7&t=1795830000', description: 'Up to 1440 px (never upscaled beyond the source)' },
               description: { type: 'string' },
               perfumer: { type: 'string', example: 'Francis Kurkdjian' },
               notes: {

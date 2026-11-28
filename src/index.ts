@@ -29,6 +29,7 @@ import { initCatalog, imageQueueLength } from './catalog/catalog';
 import { stopImageWorker } from './catalog/imageWorkerClient';
 import { seed as seedCatalog } from './catalog/service';
 import { openapiSpec } from './apiDocs/openapi';
+import { API_VERSION } from './apiDocs/guide';
 
 const app = express();
 
@@ -81,6 +82,7 @@ app.get('/health', (_req, res) => {
       parfumoAuth: { enabled: config.parfumo.authEnabled },
       apiKeyRequired: config.api.apiKeys.length > 0,
       imageQueue: imageQueueLength(),
+      apiVersion: API_VERSION,
       proxy: { configured: isProxyConfigured() },
       memory: {
         heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),

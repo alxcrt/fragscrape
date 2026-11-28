@@ -467,11 +467,11 @@ results to the browser. Never ship the API key in client-side code. Images under
   product photo until processed), **none**. Use the URLs exactly as returned.
 - Background removal runs once per image in a queue. Pending images are revalidated
   on every load, so the same URL switches to the cut-out by itself.
-- **Mirroring images?** Store `imageVersion` and `imageUpdatedAt` with your copy.
-  Poll pending ones with `GET /api/perfumes?ids=…` (up to 50 per call, e.g. every
-  1–2 minutes) and re-download when `imageStatus` turns `ready`. Re-mirror
-  everything when `imageVersion` changes.
-- Final images never change: cache them forever.
+- **Mirroring images?** Store the image URL (or `imageUpdatedAt`) with your copy.
+  Poll with `GET /api/perfumes?ids=…` (up to 50 per call, e.g. every 1–2 minutes)
+  and re-download whenever the URL changes: it changes when an image turns `ready`
+  and whenever it is re-rendered (final URLs carry the render time, `&t=`).
+- A given final URL never changes content: cache it forever.
 - Sizes: `image` 240 px for lists, `imageLarge` 720 px for detail views,
   `imageXl` up to 1440 px for large cards (never upscaled beyond the source).
   Cut-outs are transparent WebP and work on any background colour.
@@ -483,6 +483,18 @@ results to the browser. Never ship the API key in client-side code. Images under
 - Errors are `{ success: false, code, error }` with a stable `code`:
   `invalid_request` (400), `unauthorized` (401), `not_found` (404),
   `rate_limited` (429: back off and retry), `upstream_error` / `internal_error`.
+
+### 7. Compatibility and changelog
+Changes only **add** fields or endpoints; existing ones keep working, so apps don't
+need updating for each release. A breaking change would bump the major version
+(`info.version` here, `apiVersion` in `/health`) and be announced.
+
+- **2.2.0**: final image URLs carry the render time (`&t=`); background removal back
+  to full precision (cut-outs re-render in the background, old ones served until then).
+- **2.1.0**: `imageStatus`, `imageVersion`, `imageBounds`, `imageUpdatedAt`;
+  `GET /api/perfumes?ids=`; `POST /api/match {texts}`; `size=xl`; error `code`;
+  names without the year; autocomplete `brand` filter and `limit` up to 50.
+- **2.0.0**: simple API (autocomplete, match, details, brands, rankings, images).
 
 ### Example (TypeScript, server side)
 ```ts
