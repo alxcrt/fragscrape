@@ -24,7 +24,8 @@ import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
 import browserClient from './proxy/browserClient';
 import swaggerUi from 'swagger-ui-express';
 import simpleRoutes, { imagesRouter } from './api/routes/simple';
-import { initCatalog } from './catalog/catalog';
+import { initCatalog, imageQueueLength } from './catalog/catalog';
+import { stopImageWorker } from './catalog/imageWorkerClient';
 import { seed as seedCatalog } from './catalog/service';
 import { openapiSpec } from './apiDocs/openapi';
 
@@ -77,6 +78,7 @@ app.get('/health', (_req, res) => {
       database: { status: dbOk ? 'ok' : 'error' },
       parfumoAuth: { enabled: config.parfumo.authEnabled },
       apiKeyRequired: config.api.apiKeys.length > 0,
+      imageQueue: imageQueueLength(),
       proxy: { configured: isProxyConfigured() },
       memory: {
         heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
@@ -136,6 +138,7 @@ const gracefulShutdown = async (signal: string) => {
   server?.close(async () => {
     try {
       await browserClient.close().catch((err) => logger.warn('Error closing browser:', err));
+      stopImageWorker();
       database.close();
 
       logger.info('Graceful shutdown complete');

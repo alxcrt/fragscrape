@@ -6,7 +6,8 @@ import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
 import { whiteBorderRatio, refineMatte, withAlpha } from './imageProcess';
-import { matte, maskNeedsRefine } from './imageAi';
+import { maskNeedsRefine } from './imageAi';
+import { matteInWorker } from './imageWorkerClient';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
 import { identityTokens, normalizeText, searchPhrase } from './normalize';
@@ -33,7 +34,8 @@ export function toItem(row: CatalogRow, baseUrl: string): Item {
   if (row.variant) item.variant = row.variant;
   if (row.year) item.year = row.year;
   if (row.gender) item.gender = row.gender;
-  if (row.image) item.image = `${baseUrl}/images/${row.id}.webp?v=${IMAGE_VERSION}`;
+  // Pending images get their own URL, so clients fetch the cut-out once it is ready
+  if (row.image) item.image = `${baseUrl}/images/${row.id}.webp?v=${IMAGE_VERSION}${catalog.hasFinalImage(row.id, 240) ? '' : '&pending=1'}`;
   if (row.rating) item.rating = row.rating;
   if (row.votes) item.votes = row.votes;
   return item;
@@ -216,7 +218,7 @@ export async function detail(id: number, baseUrl: string): Promise<Detail> {
   }
 
   const out: Detail = { ...toItem(row, baseUrl), similar: [] };
-  if (row.image) out.imageLarge = `${baseUrl}/images/${row.id}.webp?size=large&v=${IMAGE_VERSION}`;
+  if (row.image) out.imageLarge = `${baseUrl}/images/${row.id}.webp?size=large&v=${IMAGE_VERSION}${catalog.hasFinalImage(row.id, 720) ? '' : '&pending=1'}`;
   if (perfume.concentration) out.concentration = perfume.concentration;
   if (perfume.description) out.description = perfume.description;
   if (perfume.perfumer) out.perfumer = perfume.perfumer;
@@ -307,7 +309,7 @@ async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | 
   let rgba = data;
   // Only studio shots on a white background get cut out; others are kept as they are
   if (whiteBorderRatio(data, info.width, info.height) >= 0.5) {
-    const alpha = await matte(source, info.width, info.height);
+    const alpha = await matteInWorker(source, info.width, info.height);
     if (!alpha) return null;
     rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : alpha);
   }
@@ -325,72 +327,59 @@ async function encode(rgba: Buffer, width: number, height: number): Promise<Reco
   return out;
 }
 
-/** Queue for AI cut-outs: requested images first, then prefetched ones. */
-const urgent: number[] = [];
-const later: number[] = [];
-const queued = new Set<number>();
-const waiters = new Map<number, Array<(done: boolean) => void>>();
-let working = false;
+const PRIORITY = { viewed: 2, prefetch: 1 } as const;
+let draining = false;
 
-function enqueueImage(id: number, priority: 'urgent' | 'later'): void {
-  if (catalog.getImage(id, IMAGE_SIZES.small)) return;
-  if (queued.has(id)) {
-    if (priority === 'urgent' && later.includes(id)) {
-      later.splice(later.indexOf(id), 1);
-      urgent.push(id);
-    }
-    return;
-  }
-  if (later.length > 1000 && priority === 'later') return;
-  queued.add(id);
-  (priority === 'urgent' ? urgent : later).push(id);
+/** Queue the background removal for an image (persisted, survives restarts). */
+function enqueueImage(id: number, priority: keyof typeof PRIORITY): void {
+  if (catalog.hasFinalImage(id, IMAGE_SIZES.small)) return;
+  catalog.enqueueImageJob(id, PRIORITY[priority]);
   void drainImages();
 }
 
-async function drainImages(): Promise<void> {
-  if (working) return;
-  working = true;
+/** Process queued images one at a time in the low-priority worker. */
+export async function drainImages(): Promise<void> {
+  if (draining) return;
+  draining = true;
   try {
-    for (let id = urgent.shift() ?? later.shift(); id !== undefined; id = urgent.shift() ?? later.shift()) {
-      let done = false;
+    for (let id = catalog.nextImageJob(); id !== null; id = catalog.nextImageJob()) {
       try {
-        if (catalog.getImage(id, IMAGE_SIZES.small)) {
-          done = true;
+        if (catalog.hasFinalImage(id, IMAGE_SIZES.small)) {
+          catalog.finishImageJob(id);
           continue;
         }
         const source = await original(id);
-        const rendered = source ? await renderImage(source) : null;
-        if (rendered) {
-          for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
-            catalog.setImage(id, w, 'image/webp', rendered[name]);
-          }
-          done = true;
+        if (!source) {
+          catalog.finishImageJob(id);
+          continue;
         }
+        const rendered = await renderImage(source);
+        if (!rendered) {
+          catalog.failImageJob(id);
+          continue;
+        }
+        for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
+          catalog.setImage(id, w, 'image/webp', rendered[name]);
+        }
+        catalog.finishImageJob(id);
       } catch (err) {
         logger.warn(`Image ${id} failed: ${(err as Error).message}`);
-      } finally {
-        queued.delete(id);
-        for (const resolve of waiters.get(id) ?? []) resolve(done);
-        waiters.delete(id);
+        catalog.failImageJob(id);
       }
     }
   } finally {
-    working = false;
+    draining = false;
   }
 }
 
-/** Prepare images for items about to be shown, so they are ready when requested. */
+/** Queue images for items about to be shown, behind images people are viewing. */
 export function prefetchImages(ids: number[]): void {
-  for (const id of ids) enqueueImage(id, 'later');
+  for (const id of ids) enqueueImage(id, 'prefetch');
 }
 
-// The product model takes ~20-35 s on CPU the first time an image is requested
-const WAIT_MS = 40000;
-
 /**
- * Image for a catalog id. A first request waits for the AI cut-out (once per
- * image, then stored). If that is not possible in time, the untouched original
- * is returned with final=false, never a partial cut-out.
+ * Image for a catalog id, never waiting for the model: the final cut-out when it
+ * is stored, otherwise the plain product photo (and the cut-out is queued).
  */
 export async function image(id: number, size: ImageSize): Promise<ImageResult | null> {
   const width = IMAGE_SIZES[size];
@@ -399,27 +388,22 @@ export async function image(id: number, size: ImageSize): Promise<ImageResult | 
   const row = catalog.getById(id);
   if (!row?.image) return null;
 
-  const ready = await new Promise<boolean>((resolve) => {
-    const list = waiters.get(id) ?? [];
-    list.push(resolve);
-    waiters.set(id, list);
-    enqueueImage(id, 'urgent');
-    setTimeout(() => resolve(false), WAIT_MS);
-  });
-  const after = ready ? catalog.getImage(id, width) : null;
-  if (after) return { body: after.data, type: after.type, final: true };
-
+  enqueueImage(id, 'viewed');
+  const plain = catalog.getPlainImage(id, width);
+  if (plain) return { body: plain, type: 'image/webp', final: false };
   const source = await original(id);
   if (!source) return null;
   const { data, info } = await sharp(source)
     .resize(IMAGE_SIZES.large, IMAGE_SIZES.large, { fit: 'inside', withoutEnlargement: true })
     .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const plain = await encode(data, info.width, info.height);
-  return { body: plain[size], type: 'image/webp', final: false };
+  const encoded = await encode(data, info.width, info.height);
+  for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) catalog.setPlainImage(id, w, encoded[name]);
+  return { body: encoded[size], type: 'image/webp', final: false };
 }
 
 /** Fill an empty catalog with the most popular perfumes, slowly, in the background. */
 export async function seed(): Promise<void> {
+  void drainImages();
   if (catalog.count() >= 300) return;
   for (const category of ['unisex', 'mens', 'womens']) {
     for (let page = 1; page <= 5; page++) {

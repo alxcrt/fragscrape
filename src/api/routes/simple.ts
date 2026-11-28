@@ -100,7 +100,7 @@ imagesRouter.get('/:id.:ext(webp|jpg)', asyncHandler(async (req: Request, res: R
   const img = await service.image(id, req.query.size === 'large' ? 'large' : 'small');
   if (!img) return sendError(res, 'Image not found', 404);
   res.setHeader('Content-Type', img.type);
-  // Untouched original while the AI cut-out is not ready: cache briefly
-  res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'public, max-age=60');
+  // Plain photo while the cut-out is queued (its URL carries &pending=1): cache briefly
+  res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'public, max-age=300');
   return res.send(img.body);
 }));

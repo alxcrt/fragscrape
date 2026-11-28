@@ -38,6 +38,27 @@ describe('catalog', () => {
     expect(catalog.recentlyQueried('aventus')).toBe(true);
   });
 
+  it('queues image jobs by priority, oldest first, and gives up after 3 failures', () => {
+    catalog.enqueueImageJob(10, 1);
+    catalog.enqueueImageJob(11, 1);
+    catalog.enqueueImageJob(12, 2);
+    expect(catalog.nextImageJob()).toBe(12);
+    catalog.finishImageJob(12);
+    catalog.enqueueImageJob(11, 2); // viewed: jumps ahead
+    expect(catalog.nextImageJob()).toBe(11);
+    for (let i = 0; i < 3; i++) catalog.failImageJob(11);
+    expect(catalog.nextImageJob()).toBe(10);
+    expect(catalog.imageQueueLength()).toBe(1);
+  });
+
+  it('knows whether the final image or a plain fallback is stored', () => {
+    expect(catalog.hasFinalImage(20, 240)).toBe(false);
+    catalog.setPlainImage(20, 240, Buffer.from('p'));
+    expect(catalog.getPlainImage(20, 240)?.toString()).toBe('p');
+    catalog.setImage(20, 240, 'image/webp', Buffer.from('f'));
+    expect(catalog.hasFinalImage(20, 240)).toBe(true);
+  });
+
   it('stores lists, similar ids and images', () => {
     catalog.setList('k', [1, 2]);
     expect(catalog.getList('k')?.ids).toEqual([1, 2]);

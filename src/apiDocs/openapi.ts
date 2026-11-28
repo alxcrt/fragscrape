@@ -144,7 +144,7 @@ export const openapiSpec = {
       get: {
         tags: ['Images'],
         summary: 'Perfume image (WebP)',
-        description: 'No API key needed. Background removed by an AI model; the first request for an image can take a few seconds, after that it is cached for a year. Use the URLs returned by the API (they include a version parameter).',
+        description: 'No API key needed. Use the URLs returned by the API. Background removal runs in a queue: until it is done the URL ends in `&pending=1` and serves the plain product photo (cached 5 minutes); once done, the API returns the URL without it, cached for a year.',
         security: [],
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } },
