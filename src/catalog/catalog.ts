@@ -70,6 +70,11 @@ export function initCatalog(): void {
       attempts INTEGER NOT NULL DEFAULT 0,
       added_at DATETIME NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS image_meta (
+      id INTEGER PRIMARY KEY,
+      bounds TEXT,
+      rendered_at DATETIME NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS image_plain (
       id INTEGER NOT NULL,
       width INTEGER NOT NULL,
@@ -258,4 +263,30 @@ export function finalImageIds(width: number): number[] {
 
 export function deleteFinalImages(id: number): void {
   db.prepare('DELETE FROM image_cache_v4 WHERE id = ?').run(id);
+  db.prepare('DELETE FROM image_meta WHERE id = ?').run(id);
+}
+
+export interface ImageBounds { x: number; y: number; w: number; h: number }
+
+export function setImageMeta(id: number, bounds: ImageBounds | null): void {
+  db.prepare(`
+    INSERT INTO image_meta (id, bounds, rendered_at) VALUES (?, ?, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET bounds = excluded.bounds, rendered_at = excluded.rendered_at
+  `).run(id, bounds ? JSON.stringify(bounds) : null);
+}
+
+export function getImageMeta(id: number): { bounds: ImageBounds | null; renderedAt: string } | null {
+  const row = db.prepare('SELECT bounds, rendered_at FROM image_meta WHERE id = ?').get(id) as { bounds: string | null; rendered_at: string } | undefined;
+  return row ? { bounds: row.bounds ? JSON.parse(row.bounds) : null, renderedAt: row.rendered_at } : null;
+}
+
+export function finalImageIdsWithoutMeta(width: number): number[] {
+  return (db.prepare('SELECT i.id FROM image_cache_v4 i LEFT JOIN image_meta m ON m.id = i.id WHERE i.width = ? AND m.id IS NULL').all(width) as Array<{ id: number }>).map((r) => r.id);
+}
+
+export function getByIds(ids: number[]): CatalogRow[] {
+  if (ids.length === 0) return [];
+  const rows = db.prepare(`SELECT * FROM catalog WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as CatalogRow[];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
 }

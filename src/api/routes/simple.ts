@@ -15,13 +15,14 @@ const router = Router();
 
 const autocompleteQuery = z.object({
   q: z.string().trim().min(1, 'q is required').max(100),
-  limit: positiveIntParam('limit', { min: 1, max: 20, default: 8 }),
+  limit: positiveIntParam('limit', { min: 1, max: 50, default: 8 }),
+  brand: z.string().trim().min(1).max(100).optional(),
 });
 
-/** GET /api/autocomplete?q=cre&limit=8 */
+/** GET /api/autocomplete?q=cre&limit=8[&brand=Creed] */
 router.get('/autocomplete', validate({ query: autocompleteQuery }), asyncHandler(async (req: Request, res: Response) => {
-  const { q, limit } = req.query as unknown as { q: string; limit: number };
-  const ranked = await service.autocomplete(q, limit);
+  const { q, limit, brand } = req.query as unknown as { q: string; limit: number; brand?: string };
+  const ranked = await service.autocomplete(q, limit, brand);
   // Keystrokes are frequent: prepare only the top suggestions' images ahead of time
   service.prefetchImages(ranked.slice(0, 3).map((r) => r.row.id));
   return sendSuccess(res, ranked.map((r) => service.toItem(r.row, baseUrl(req))));
@@ -35,12 +36,7 @@ const matchInput = z.object({
 async function handleMatch(req: Request, res: Response, text: string, limit: number) {
   const ranked = await service.match(text, limit);
   service.prefetchImages(ranked.slice(0, 1).map((r) => r.row.id));
-  const base = baseUrl(req);
-  const top = ranked[0];
-  return sendSuccess(res, {
-    match: top && top.score >= 0.55 ? { ...service.toItem(top.row, base), confidence: top.score } : null,
-    alternatives: ranked.slice(top && top.score >= 0.55 ? 1 : 0).map((r) => ({ ...service.toItem(r.row, base), confidence: r.score })),
-  });
+  return sendSuccess(res, matchResult(req, ranked));
 }
 
 /** GET /api/match?text=CREED AVENTUS eau de parfum 100ml */
@@ -49,12 +45,63 @@ router.get('/match', validate({ query: matchInput }), asyncHandler(async (req: R
   return handleMatch(req, res, text, limit);
 }));
 
-/** POST /api/match { "text": "..." } for longer text */
-router.post('/match', validate({ body: z.object({ text: z.string().trim().min(1).max(2000), limit: z.number().int().min(1).max(10).optional() }) }),
-  asyncHandler(async (req: Request, res: Response) => {
-    const { text, limit } = req.body as { text: string; limit?: number };
-    return handleMatch(req, res, text, limit ?? 5);
+function matchResult(req: Request, ranked: Array<{ row: import('../../catalog/catalog').CatalogRow; score: number }>) {
+  const base = baseUrl(req);
+  const top = ranked[0];
+  const ok = !!top && top.score >= 0.55;
+  return {
+    match: ok ? { ...service.toItem(top.row, base), confidence: top.score } : null,
+    alternatives: ranked.slice(ok ? 1 : 0).map((r) => ({ ...service.toItem(r.row, base), confidence: r.score })),
+  };
+}
+
+const matchBody = z.union([
+  z.object({ text: z.string().trim().min(1).max(2000), limit: z.number().int().min(1).max(10).optional() }),
+  z.object({ texts: z.array(z.string().trim().min(1).max(2000)).min(1).max(20), limit: z.number().int().min(1).max(10).optional() }),
+]);
+
+/**
+ * POST /api/match { "text": "..." } for one text, or { "texts": [...] } (up to 20,
+ * e.g. every bottle read from one shelf photo) for one result per text, in order.
+ */
+router.post('/match', validate({ body: matchBody }), asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as { text?: string; texts?: string[]; limit?: number };
+  const limit = body.limit ?? 5;
+  if (body.texts) {
+    const results = await mapLimit(body.texts, 3, async (text) => {
+      const ranked = await service.match(text, limit);
+      service.prefetchImages(ranked.slice(0, 1).map((r) => r.row.id));
+      return { text, ...matchResult(req, ranked) };
+    });
+    return sendSuccess(res, results);
+  }
+  return handleMatch(req, res, body.text!, limit);
+}));
+
+async function mapLimit<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
   }));
+  return out;
+}
+
+const idsQuery = z.object({
+  ids: z.string().regex(/^\d+(,\d+)*$/, 'ids must be comma-separated numbers')
+    .transform((v) => [...new Set(v.split(',').map(Number))])
+    .refine((v) => v.length <= 50, 'at most 50 ids'),
+});
+
+/** GET /api/perfumes?ids=1,2,3 (up to 50): basic records with image state, in the order given */
+router.get('/perfumes', validate({ query: idsQuery }), asyncHandler(async (req: Request, res: Response) => {
+  const { ids } = req.query as unknown as { ids: number[] };
+  const base = baseUrl(req);
+  return sendSuccess(res, service.byIds(ids).map((r) => service.toItem(r, base)));
+}));
 
 /** GET /api/perfumes/:id */
 router.get('/perfumes/:id', validate({ params: z.object({ id: positiveIntParam('id') }) }), asyncHandler(async (req: Request, res: Response) => {
@@ -95,13 +142,14 @@ export const imagesRouter = Router();
 imagesRouter.get('/:id.:ext(webp|jpg)', asyncHandler(async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id < 1) return sendError(res, 'Invalid image id', 400);
-  const img = await service.image(id, req.query.size === 'large' ? 'large' : 'small');
+  const size = req.query.size === 'xl' ? 'xl' : req.query.size === 'large' ? 'large' : 'small';
+  const img = await service.image(id, size);
   if (!img) return sendError(res, 'Image not found', 404);
   res.setHeader('Content-Type', img.type);
   // Plain photo while the cut-out is queued: browsers must revalidate (ETag) every time,
   // so the same URL shows the cut-out as soon as it is ready; edge caches skip it
   res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'no-cache');
-  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${req.query.size === 'large' ? 'l' : 's'}"`);
+  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${size}"`);
   if (req.fresh) return res.status(304).end();
   return res.send(img.body);
 }));
