@@ -9,7 +9,7 @@ describe('openapi spec', () => {
 
   it('documents the simple API only', () => {
     expect(Object.keys(openapiSpec.paths).sort()).toEqual([
-      '/api/autocomplete', '/api/brands/{name}', '/api/match', '/api/perfumes/{id}', '/api/rankings', '/health', '/images/{id}.webp',
+      '/api/autocomplete', '/api/brands/{name}', '/api/match', '/api/perfumes', '/api/perfumes/{id}', '/api/rankings', '/health', '/images/{id}.webp',
     ]);
   });
 

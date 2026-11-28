@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import logger from '../../utils/logger';
 import { ApiResponse } from '../../types';
+import { errorCode } from '../../utils/apiResponse';
 
 export class AppError extends Error {
   constructor(
@@ -107,6 +108,7 @@ export const errorHandler = (
 
   const response: ApiResponse<null> = {
     success: false,
+    code: errorCode(statusCode),
     error: message,
     timestamp: new Date(),
   };
@@ -117,6 +119,7 @@ export const errorHandler = (
 export const notFoundHandler = (req: Request, res: Response) => {
   const response: ApiResponse<null> = {
     success: false,
+    code: 'not_found',
     error: `Route ${req.originalUrl} not found`,
     timestamp: new Date(),
   };

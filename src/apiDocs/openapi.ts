@@ -69,7 +69,8 @@ export const openapiSpec = {
         description: 'Prefix and typo tolerant, popular perfumes first. Call it on each keystroke (debounce ~150 ms).',
         parameters: [
           { name: 'q', in: 'query', required: true, description: 'Text typed so far', schema: { type: 'string', maxLength: 100, example: 'baccarat ro' } },
-          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 20, default: 8 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 50, default: 8 } },
+          { name: 'brand', in: 'query', description: 'Only perfumes from this brand', schema: { type: 'string', example: 'Creed' } },
         ],
         responses: { 200: ok({ type: 'array', items: item }), ...errors },
       },
@@ -87,23 +88,43 @@ export const openapiSpec = {
       },
       post: {
         tags: ['Search'],
-        summary: 'Match free text to a perfume (long text)',
+        summary: 'Match one text, or up to 20 at once',
+        description: 'Send `text` for one result, or `texts` (up to 20, e.g. every bottle read from one shelf photo) for an array of results in the same order, each with its `text`.',
         requestBody: {
           required: true,
           content: {
             'application/json': {
               schema: {
-                type: 'object',
-                required: ['text'],
-                properties: {
-                  text: { type: 'string', maxLength: 2000, example: 'MAISON FRANCIS KURKDJIAN PARIS BACCARAT ROUGE 540 EXTRAIT DE PARFUM 70 ml' },
-                  limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
-                },
+                oneOf: [
+                  {
+                    type: 'object', required: ['text'],
+                    properties: {
+                      text: { type: 'string', maxLength: 2000, example: 'MAISON FRANCIS KURKDJIAN PARIS BACCARAT ROUGE 540 EXTRAIT DE PARFUM 70 ml' },
+                      limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+                    },
+                  },
+                  {
+                    type: 'object', required: ['texts'],
+                    properties: {
+                      texts: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 2000 }, example: ['CREED AVENTUS 100ml', 'Dior Sauvage EDT'] },
+                      limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+                    },
+                  },
+                ],
               },
             },
           },
         },
-        responses: { 200: ok(matchResult), ...errors },
+        responses: { 200: ok({ oneOf: [matchResult, { type: 'array', items: { allOf: [{ type: 'object', properties: { text: { type: 'string' } } }, matchResult] } }] }), ...errors },
+      },
+    },
+    '/api/perfumes': {
+      get: {
+        tags: ['Perfumes'],
+        summary: 'Several perfumes at once',
+        description: 'Basic records with image state for up to 50 ids, in the order given; unknown ids are left out. Cheap way to check pending images.',
+        parameters: [{ name: 'ids', in: 'query', required: true, schema: { type: 'string', example: '1,2,3' }, description: 'Comma-separated ids (up to 50)' }],
+        responses: { 200: ok({ type: 'array', items: item }), ...errors },
       },
     },
     '/api/perfumes/{id}': {
@@ -150,7 +171,7 @@ export const openapiSpec = {
         security: [],
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } },
-          { name: 'size', in: 'query', schema: { type: 'string', enum: ['small', 'large'], default: 'small' }, description: 'small = 240 px, large = 720 px' },
+          { name: 'size', in: 'query', schema: { type: 'string', enum: ['small', 'large', 'xl'], default: 'small' }, description: 'small = 240 px, large = 720 px, xl = up to 1440 px (never upscaled)' },
         ],
         responses: { 200: { description: 'Image', content: { 'image/webp': { schema: { type: 'string', format: 'binary' } } } }, 404: { description: 'No image' } },
       },
@@ -178,7 +199,12 @@ export const openapiSpec = {
     schemas: {
       Error: {
         type: 'object',
-        properties: { success: { type: 'boolean', example: false }, error: { type: 'string' }, timestamp: { type: 'string', format: 'date-time' } },
+        properties: {
+          success: { type: 'boolean', example: false },
+          code: { type: 'string', enum: ['invalid_request', 'unauthorized', 'forbidden', 'not_found', 'rate_limited', 'upstream_error', 'unavailable', 'internal_error'], example: 'not_found' },
+          error: { type: 'string', description: 'Human-readable message' },
+          timestamp: { type: 'string', format: 'date-time' },
+        },
       },
       Perfume: {
         type: 'object',
@@ -190,7 +216,14 @@ export const openapiSpec = {
           variant: { type: 'string', example: 'Extrait de Parfum', description: 'Concentration or edition when several share a name' },
           year: { type: 'integer', example: 2017 },
           gender: { type: 'string', enum: ['male', 'female', 'unisex'] },
-          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=6' },
+          image: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?v=6', description: '240 px image URL; use as returned' },
+          imageStatus: { type: 'string', enum: ['ready', 'pending', 'none'], description: 'ready = background removed (final); pending = plain photo until processed; none = no image' },
+          imageVersion: { type: 'integer', example: 6, description: 'Changes when every image is re-rendered; re-mirror stored copies with an older version' },
+          imageBounds: {
+            type: 'object', description: 'Opaque area of the cut-out as fractions of the square image (ready only); same framing as the pending photo',
+            properties: { x: { type: 'number', example: 0.21 }, y: { type: 'number', example: 0.04 }, w: { type: 'number', example: 0.58 }, h: { type: 'number', example: 0.93 } },
+          },
+          imageUpdatedAt: { type: 'string', format: 'date-time', description: 'When the final image was rendered (ready only)' },
           rating: { type: 'number', description: 'Average rating, 0-10', example: 8.2 },
           votes: { type: 'integer', description: 'Number of ratings', example: 3408 },
         },
@@ -201,7 +234,8 @@ export const openapiSpec = {
           {
             type: 'object',
             properties: {
-              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=6' },
+              imageLarge: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=large&v=6', description: '720 px' },
+              imageXl: { type: 'string', example: 'https://fragrance.alexcretu.com/images/42.webp?size=xl&v=6', description: 'Up to 1440 px (never upscaled beyond the source)' },
               description: { type: 'string' },
               perfumer: { type: 'string', example: 'Francis Kurkdjian' },
               notes: {

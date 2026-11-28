@@ -60,6 +60,8 @@ export interface ScraperOptions {
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
+  /** Stable machine-readable error code, e.g. "not_found" */
+  code?: string;
   error?: string;
   timestamp: Date;
 }

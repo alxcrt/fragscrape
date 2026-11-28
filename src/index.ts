@@ -19,6 +19,7 @@ import cacheRoutes from './api/routes/cache';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
 import { displayStartupBanner } from './utils/banner';
 import { TIMEOUT_CONFIG } from './constants/scraping';
+import { sendError } from './utils/apiResponse';
 import { apiKeyAuth } from './api/middleware/apiKeyAuth';
 import { requireParfumoAuthEnabled } from './api/middleware/parfumoAuthGuard';
 import browserClient from './proxy/browserClient';
@@ -53,7 +54,8 @@ app.use('/images', imagesRouter);
 const limiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.maxRequests,
-  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  handler: (_req, res) => sendError(res, 'Too many requests, please slow down and retry shortly', 429),
 });
 
 app.use('/api', limiter);

@@ -16,6 +16,8 @@ import {
   perfumeUrl, imagePathFromSrc, imageUrl, mediaKeyFromSrc,
 } from './source';
 
+export type ImageStatus = 'ready' | 'pending' | 'none';
+
 /** The public shape of a perfume in lists. */
 export interface Item {
   id: number;
@@ -25,17 +27,47 @@ export interface Item {
   year?: number;
   gender?: string;
   image?: string;
+  imageStatus: ImageStatus;
+  imageVersion: number;
+  /** Opaque area of the cut-out as fractions of the image (ready images only) */
+  imageBounds?: catalog.ImageBounds;
+  /** When the final image was rendered (ready images only) */
+  imageUpdatedAt?: string;
   rating?: number;
   votes?: number;
 }
 
-export function toItem(row: CatalogRow, baseUrl: string): Item {
-  const item: Item = { id: row.id, name: row.name, brand: row.brand };
-  if (row.variant) item.variant = row.variant;
-  if (row.year) item.year = row.year;
-  if (row.gender) item.gender = row.gender;
+/** Split a trailing "(2011)" disambiguation out of a name. */
+export function cleanName(name: string, year: number | null): { name: string; year: number | null } {
+  const m = name.match(/^(.*\S)\s*\(((?:19|20)\d{2})\)$/);
+  if (!m) return { name, year };
+  return { name: m[1], year: year ?? parseInt(m[2], 10) };
+}
+
+export function imageStatus(row: CatalogRow): ImageStatus {
+  if (!row.image) return 'none';
+  return catalog.hasFinalImage(row.id, IMAGE_SIZES.small) ? 'ready' : 'pending';
+}
+
+export function imageLink(row: CatalogRow, baseUrl: string, size: ImageSize, status = imageStatus(row)): string {
+  const sizeParam = size === 'small' ? '' : `size=${size}&`;
   // Pending images get their own URL, so clients fetch the cut-out once it is ready
-  if (row.image) item.image = `${baseUrl}/images/${row.id}.webp?v=${IMAGE_VERSION}${catalog.hasFinalImage(row.id, 240) ? '' : '&pending=1'}`;
+  return `${baseUrl}/images/${row.id}.webp?${sizeParam}v=${IMAGE_VERSION}${status === 'pending' ? '&pending=1' : ''}`;
+}
+
+export function toItem(row: CatalogRow, baseUrl: string): Item {
+  const { name, year } = cleanName(row.name, row.year);
+  const status = imageStatus(row);
+  const item: Item = { id: row.id, name, brand: row.brand, imageStatus: status, imageVersion: IMAGE_VERSION };
+  if (row.variant) item.variant = row.variant;
+  if (year) item.year = year;
+  if (row.gender) item.gender = row.gender;
+  if (status !== 'none') item.image = imageLink(row, baseUrl, 'small', status);
+  if (status === 'ready') {
+    const meta = catalog.getImageMeta(row.id);
+    if (meta?.bounds) item.imageBounds = meta.bounds;
+    if (meta?.renderedAt) item.imageUpdatedAt = new Date(meta.renderedAt.replace(' ', 'T') + 'Z').toISOString();
+  }
   if (row.rating) item.rating = row.rating;
   if (row.votes) item.votes = row.votes;
   return item;
@@ -78,10 +110,16 @@ async function liveLookup(phrase: string): Promise<number> {
 }
 
 /** Suggestions while typing. Answers from the local catalog; goes live only when it has too little. */
-export async function autocomplete(q: string, limit: number): Promise<Ranked[]> {
-  let ranked = rankLocal(q, 'autocomplete', limit);
-  const words = identityTokens(q);
-  const phrase = searchPhrase(q);
+export async function autocomplete(q: string, limit: number, brand?: string): Promise<Ranked[]> {
+  const brandKey = brand ? normalizeText(brand) : '';
+  // With a brand filter, rank a wider pool and keep that brand's perfumes
+  const rank = () => {
+    const pool = rankLocal(brand ? `${q} ${brand}` : q, 'autocomplete', brand ? limit * 6 : limit);
+    return (brandKey ? pool.filter((r) => normalizeText(r.row.brand).includes(brandKey)) : pool).slice(0, limit);
+  };
+  let ranked = rank();
+  const words = identityTokens(brand ? `${brand} ${q}` : q);
+  const phrase = searchPhrase(brand ? `${brand} ${q}` : q);
   if (phrase.length < 3 || words.length === 0) return ranked;
 
   const lookup = async () => {
@@ -99,7 +137,7 @@ export async function autocomplete(q: string, limit: number): Promise<Ranked[]> 
     return ranked;
   }
   await lookup();
-  ranked = rankLocal(q, 'autocomplete', limit);
+  ranked = rank();
   return ranked;
 }
 
@@ -134,6 +172,7 @@ export async function match(text: string, limit: number): Promise<Ranked[]> {
 
 export interface Detail extends Item {
   imageLarge?: string;
+  imageXl?: string;
   concentration?: string;
   description?: string;
   perfumer?: string;
@@ -218,7 +257,10 @@ export async function detail(id: number, baseUrl: string): Promise<Detail> {
   }
 
   const out: Detail = { ...toItem(row, baseUrl), similar: [] };
-  if (row.image) out.imageLarge = `${baseUrl}/images/${row.id}.webp?size=large&v=${IMAGE_VERSION}${catalog.hasFinalImage(row.id, 720) ? '' : '&pending=1'}`;
+  if (row.image) {
+    out.imageLarge = imageLink(row, baseUrl, 'large', out.imageStatus);
+    out.imageXl = imageLink(row, baseUrl, 'xl', out.imageStatus);
+  }
   if (perfume.concentration) out.concentration = perfume.concentration;
   if (perfume.description) out.description = perfume.description;
   if (perfume.perfumer) out.perfumer = perfume.perfumer;
@@ -269,7 +311,7 @@ export function rankings(category: string, page: number, production: string, edi
   return cachedList(`rank:${category}:${page}:${production}:${edition}`, () => rankingSource(category, page, production, edition));
 }
 
-export const IMAGE_SIZES = { small: 240, large: 720 } as const;
+export const IMAGE_SIZES = { small: 240, large: 720, xl: 1440 } as const;
 export type ImageSize = keyof typeof IMAGE_SIZES;
 export interface ImageResult { body: Buffer; type: string; final: boolean }
 
@@ -299,8 +341,8 @@ export const IMAGE_VERSION = 6;
  * Cut out the product with the AI model and encode both sizes as WebP.
  * Returns null when a white-background image could not be cut out (no model).
  */
-async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | null> {
-  const max = IMAGE_SIZES.large;
+async function renderImage(source: Buffer): Promise<{ sizes: Record<ImageSize, Buffer>; bounds: catalog.ImageBounds | null } | null> {
+  const max = IMAGE_SIZES.xl;
   const { data, info } = await sharp(source)
     .resize(max, max, { fit: 'inside', withoutEnlargement: true })
     .ensureAlpha()
@@ -313,7 +355,25 @@ async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | 
     if (!alpha) return null;
     rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : alpha);
   }
-  return encode(rgba, info.width, info.height);
+  return { sizes: await encode(rgba, info.width, info.height), bounds: opaqueBounds(rgba, info.width, info.height) };
+}
+
+/** Bounding box of pixels with alpha >= 32, as fractions of the image. */
+export function opaqueBounds(rgba: Buffer, width: number, height: number): catalog.ImageBounds | null {
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (rgba[(y * width + x) * 4 + 3] >= 32) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  const r = (v: number) => Math.round(v * 10000) / 10000;
+  return { x: r(minX / width), y: r(minY / height), w: r((maxX - minX + 1) / width), h: r((maxY - minY + 1) / height) };
 }
 
 async function encode(rgba: Buffer, width: number, height: number): Promise<Record<ImageSize, Buffer>> {
@@ -359,8 +419,9 @@ export async function drainImages(): Promise<void> {
           continue;
         }
         for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
-          catalog.setImage(id, w, 'image/webp', rendered[name]);
+          catalog.setImage(id, w, 'image/webp', rendered.sizes[name]);
         }
+        catalog.setImageMeta(id, rendered.bounds);
         catalog.finishImageJob(id);
       } catch (err) {
         logger.warn(`Image ${id} failed: ${(err as Error).message}`);
@@ -407,21 +468,58 @@ export async function image(id: number, size: ImageSize): Promise<ImageResult | 
   const row = catalog.getById(id);
   if (!row?.image) return null;
 
+  // Rendered before the xl size existed: build it from the original and the stored cut-out's mask
+  if (size === 'xl' && catalog.hasFinalImage(id, IMAGE_SIZES.large)) {
+    const xl = await xlFromStoredMask(id);
+    if (xl) return { body: xl, type: 'image/webp', final: true };
+  }
+
   enqueueImage(id, 'viewed');
   const plain = catalog.getPlainImage(id, width);
   if (plain) return { body: plain, type: 'image/webp', final: false };
   const source = await original(id);
   if (!source) return null;
   const { data, info } = await sharp(source)
-    .resize(IMAGE_SIZES.large, IMAGE_SIZES.large, { fit: 'inside', withoutEnlargement: true })
+    .resize(IMAGE_SIZES.xl, IMAGE_SIZES.xl, { fit: 'inside', withoutEnlargement: true })
     .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const encoded = await encode(data, info.width, info.height);
   for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) catalog.setPlainImage(id, w, encoded[name]);
   return { body: encoded[size], type: 'image/webp', final: false };
 }
 
+async function xlFromStoredMask(id: number): Promise<Buffer | null> {
+  const large = catalog.getImage(id, IMAGE_SIZES.large);
+  const source = await original(id);
+  if (!large || !source) return null;
+  const { data, info } = await sharp(source)
+    .resize(IMAGE_SIZES.xl, IMAGE_SIZES.xl, { fit: 'inside', withoutEnlargement: true })
+    .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const alpha = await sharp(large.data).ensureAlpha().extractChannel(3)
+    .resize(info.width, info.height, { fit: 'fill', kernel: 'lanczos3' }).raw().toBuffer();
+  const body = await sharp(withAlpha(data, alpha), { raw: { width: info.width, height: info.height, channels: 4 } })
+    .webp({ quality: 85, alphaQuality: 95, effort: 5 }).toBuffer();
+  catalog.setImage(id, IMAGE_SIZES.xl, 'image/webp', body);
+  return body;
+}
+
+/** Measure opaque bounds for images rendered before bounds were recorded. */
+export async function backfillImageMeta(): Promise<void> {
+  for (const id of catalog.finalImageIdsWithoutMeta(IMAGE_SIZES.large)) {
+    const img = catalog.getImage(id, IMAGE_SIZES.large);
+    if (!img) continue;
+    const { data, info } = await sharp(img.data).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    catalog.setImageMeta(id, opaqueBounds(data, info.width, info.height));
+  }
+}
+
+/** Basic records for several ids (in the order given; unknown ids are left out). */
+export function byIds(ids: number[]): CatalogRow[] {
+  return catalog.getByIds(ids);
+}
+
 /** Fill an empty catalog with the most popular perfumes, slowly, in the background. */
 export async function seed(): Promise<void> {
+  await backfillImageMeta().catch((err) => logger.warn(`Image bounds backfill failed: ${(err as Error).message}`));
   if (!maskNeedsRefine()) await purgeUncutImages().catch((err) => logger.warn(`Image cleanup failed: ${(err as Error).message}`));
   void drainImages();
   if (catalog.count() >= 300) return;
