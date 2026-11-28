@@ -34,7 +34,7 @@ const matchInput = z.object({
 
 async function handleMatch(req: Request, res: Response, text: string, limit: number) {
   const ranked = await service.match(text, limit);
-  service.prefetchImages(ranked.map((r) => r.row.id));
+  service.prefetchImages(ranked.slice(0, 1).map((r) => r.row.id));
   const base = baseUrl(req);
   const top = ranked[0];
   return sendSuccess(res, {
@@ -59,7 +59,7 @@ router.post('/match', validate({ body: z.object({ text: z.string().trim().min(1)
 /** GET /api/perfumes/:id */
 router.get('/perfumes/:id', validate({ params: z.object({ id: positiveIntParam('id') }) }), asyncHandler(async (req: Request, res: Response) => {
   const detail = await service.detail(Number(req.params.id), baseUrl(req));
-  service.prefetchImages([detail.id, ...detail.similar.map((s) => s.id)]);
+  service.prefetchImages([detail.id]);
   return sendSuccess(res, detail);
 }));
 
@@ -69,7 +69,6 @@ router.get('/brands/:name', validate({
   query: z.object({ page: positiveIntParam('page', { min: 1, max: 500, default: 1 }) }),
 }), asyncHandler(async (req: Request, res: Response) => {
   const rows = await service.brand(req.params.name, (req.query as unknown as { page: number }).page);
-  service.prefetchImages(rows.map((r) => r.id));
   return sendSuccess(res, rows.map((r) => service.toItem(r, baseUrl(req))));
 }));
 
@@ -85,7 +84,6 @@ const rankingsQuery = z.object({
 router.get('/rankings', validate({ query: rankingsQuery }), asyncHandler(async (req: Request, res: Response) => {
   const { category, page, limit, production, edition } = req.query as unknown as z.infer<typeof rankingsQuery>;
   const rows = await service.rankings(category, page, production, edition);
-  service.prefetchImages(rows.slice(0, limit).map((r) => r.id));
   const base = baseUrl(req);
   return sendSuccess(res, rows.slice(0, limit).map((r, i) => ({ rank: (page - 1) * rows.length + i + 1, ...service.toItem(r, base) })));
 }));

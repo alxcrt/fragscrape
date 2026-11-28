@@ -226,13 +226,17 @@ export function setPlainImage(id: number, width: number, data: Buffer): void {
 export function enqueueImageJob(id: number, priority: number): void {
   db.prepare(`
     INSERT INTO image_jobs (id, priority) VALUES (?, ?)
-    ON CONFLICT(id) DO UPDATE SET priority = MAX(priority, excluded.priority)
+    ON CONFLICT(id) DO UPDATE SET priority = MAX(priority, excluded.priority),
+      added_at = CASE WHEN excluded.priority >= priority THEN datetime('now') ELSE added_at END
   `).run(id, priority);
 }
 
-/** Next job: highest priority first, then oldest; jobs that failed 3 times are skipped. */
+/**
+ * Next job: highest priority first, then the most recently requested (what someone
+ * is looking at right now); jobs that failed 3 times are skipped.
+ */
 export function nextImageJob(): number | null {
-  const row = db.prepare('SELECT id FROM image_jobs WHERE attempts < 3 ORDER BY priority DESC, added_at ASC LIMIT 1').get() as { id: number } | undefined;
+  const row = db.prepare('SELECT id FROM image_jobs WHERE attempts < 3 ORDER BY priority DESC, added_at DESC, rowid DESC LIMIT 1').get() as { id: number } | undefined;
   return row?.id ?? null;
 }
 
