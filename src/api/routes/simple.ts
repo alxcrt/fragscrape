@@ -98,7 +98,10 @@ imagesRouter.get('/:id.:ext(webp|jpg)', asyncHandler(async (req: Request, res: R
   const img = await service.image(id, req.query.size === 'large' ? 'large' : 'small');
   if (!img) return sendError(res, 'Image not found', 404);
   res.setHeader('Content-Type', img.type);
-  // Plain photo while the cut-out is queued (its URL carries &pending=1): cache briefly
-  res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'public, max-age=300');
+  // Plain photo while the cut-out is queued: browsers must revalidate (ETag) every time,
+  // so the same URL shows the cut-out as soon as it is ready; edge caches skip it
+  res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'no-cache');
+  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${req.query.size === 'large' ? 'l' : 's'}"`);
+  if (req.fresh) return res.status(304).end();
   return res.send(img.body);
 }));
