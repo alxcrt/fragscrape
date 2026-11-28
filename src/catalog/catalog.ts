@@ -89,6 +89,8 @@ export function initCatalog(): void {
   `);
   // Images from earlier pipelines are rebuilt
   db.exec('DROP TABLE IF EXISTS image_cache; DROP TABLE IF EXISTS image_cache_v2; DROP TABLE IF EXISTS image_cache_v3');
+  db.exec('CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, ran_at DATETIME NOT NULL DEFAULT (datetime(\'now\')))');
+  try { db.exec('ALTER TABLE image_meta ADD COLUMN model TEXT'); } catch { /* exists */ }
   // Similar perfumes for a detail page, as [{ id, similarity }]
   try { db.exec('ALTER TABLE catalog ADD COLUMN similar TEXT'); } catch { /* exists */ }
 }
@@ -268,16 +270,38 @@ export function deleteFinalImages(id: number): void {
 
 export interface ImageBounds { x: number; y: number; w: number; h: number }
 
-export function setImageMeta(id: number, bounds: ImageBounds | null): void {
+export function setImageMeta(id: number, bounds: ImageBounds | null, model?: string): void {
   db.prepare(`
-    INSERT INTO image_meta (id, bounds, rendered_at) VALUES (?, ?, datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET bounds = excluded.bounds, rendered_at = excluded.rendered_at
-  `).run(id, bounds ? JSON.stringify(bounds) : null);
+    INSERT INTO image_meta (id, bounds, rendered_at, model) VALUES (?, ?, datetime('now'), ?)
+    ON CONFLICT(id) DO UPDATE SET bounds = excluded.bounds, rendered_at = excluded.rendered_at, model = COALESCE(excluded.model, model)
+  `).run(id, bounds ? JSON.stringify(bounds) : null, model ?? null);
 }
 
-export function getImageMeta(id: number): { bounds: ImageBounds | null; renderedAt: string } | null {
-  const row = db.prepare('SELECT bounds, rendered_at FROM image_meta WHERE id = ?').get(id) as { bounds: string | null; rendered_at: string } | undefined;
-  return row ? { bounds: row.bounds ? JSON.parse(row.bounds) : null, renderedAt: row.rendered_at } : null;
+/** Bounds only (backfill): keeps rendered_at and model. */
+export function setImageBounds(id: number, bounds: ImageBounds | null, renderedAt: string): void {
+  db.prepare(`
+    INSERT INTO image_meta (id, bounds, rendered_at) VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET bounds = excluded.bounds
+  `).run(id, bounds ? JSON.stringify(bounds) : null, renderedAt);
+}
+
+export function getImageMeta(id: number): { bounds: ImageBounds | null; renderedAt: string; model: string | null } | null {
+  const row = db.prepare('SELECT bounds, rendered_at, model FROM image_meta WHERE id = ?').get(id) as { bounds: string | null; rendered_at: string; model: string | null } | undefined;
+  return row ? { bounds: row.bounds ? JSON.parse(row.bounds) : null, renderedAt: row.rendered_at, model: row.model } : null;
+}
+
+/** Run a one-time data migration (remembered in the migrations table). */
+export function runOnce(name: string, fn: () => void): boolean {
+  if (db.prepare('SELECT 1 FROM migrations WHERE name = ?').get(name)) return false;
+  db.transaction(() => {
+    fn();
+    db.prepare('INSERT INTO migrations (name) VALUES (?)').run(name);
+  })();
+  return true;
+}
+
+export function rawDb(): Database.Database {
+  return db;
 }
 
 export function finalImageIdsWithoutMeta(width: number): number[] {
@@ -289,4 +313,10 @@ export function getByIds(ids: number[]): CatalogRow[] {
   const rows = db.prepare(`SELECT * FROM catalog WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as CatalogRow[];
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+}
+
+/** When the stored final image was rendered (its 240 px row). */
+export function imageRenderedAt(id: number): string | null {
+  const row = db.prepare('SELECT fetched_at FROM image_cache_v4 WHERE id = ? AND width = 240').get(id) as { fetched_at: string } | undefined;
+  return row?.fetched_at ?? null;
 }

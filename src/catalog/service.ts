@@ -6,7 +6,7 @@ import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
 import { whiteBorderRatio, refineMatte, withAlpha } from './imageProcess';
-import { maskNeedsRefine } from './imageAi';
+import { maskNeedsRefine, modelId } from './imageAi';
 import { matteInWorker } from './imageWorkerClient';
 import type { CatalogRow } from './catalog';
 import { scoreCandidate, MatchMode } from './matcher';
@@ -49,10 +49,16 @@ export function imageStatus(row: CatalogRow): ImageStatus {
   return catalog.hasFinalImage(row.id, IMAGE_SIZES.small) ? 'ready' : 'pending';
 }
 
-export function imageLink(row: CatalogRow, baseUrl: string, size: ImageSize, status = imageStatus(row)): string {
+function renderEpoch(renderedAt: string | undefined): number | null {
+  return renderedAt ? Math.floor(Date.parse(renderedAt.replace(' ', 'T') + 'Z') / 1000) : null;
+}
+
+export function imageLink(row: CatalogRow, baseUrl: string, size: ImageSize, status = imageStatus(row), renderedAt?: string): string {
   const sizeParam = size === 'small' ? '' : `size=${size}&`;
-  // Pending images get their own URL, so clients fetch the cut-out once it is ready
-  return `${baseUrl}/images/${row.id}.webp?${sizeParam}v=${IMAGE_VERSION}${status === 'pending' ? '&pending=1' : ''}`;
+  // Pending images get their own URL, so clients fetch the cut-out once it is ready.
+  // Final URLs carry the render time: a re-render always gets a new URL, so no cache keeps an old copy.
+  const t = status === 'ready' ? renderEpoch(renderedAt ?? catalog.getImageMeta(row.id)?.renderedAt) : null;
+  return `${baseUrl}/images/${row.id}.webp?${sizeParam}v=${IMAGE_VERSION}${status === 'pending' ? '&pending=1' : ''}${t ? `&t=${t}` : ''}`;
 }
 
 export function toItem(row: CatalogRow, baseUrl: string): Item {
@@ -62,12 +68,10 @@ export function toItem(row: CatalogRow, baseUrl: string): Item {
   if (row.variant) item.variant = row.variant;
   if (year) item.year = year;
   if (row.gender) item.gender = row.gender;
-  if (status !== 'none') item.image = imageLink(row, baseUrl, 'small', status);
-  if (status === 'ready') {
-    const meta = catalog.getImageMeta(row.id);
-    if (meta?.bounds) item.imageBounds = meta.bounds;
-    if (meta?.renderedAt) item.imageUpdatedAt = new Date(meta.renderedAt.replace(' ', 'T') + 'Z').toISOString();
-  }
+  const meta = status === 'ready' ? catalog.getImageMeta(row.id) : null;
+  if (status !== 'none') item.image = imageLink(row, baseUrl, 'small', status, meta?.renderedAt);
+  if (meta?.bounds) item.imageBounds = meta.bounds;
+  if (meta?.renderedAt) item.imageUpdatedAt = new Date(meta.renderedAt.replace(' ', 'T') + 'Z').toISOString();
   if (row.rating) item.rating = row.rating;
   if (row.votes) item.votes = row.votes;
   return item;
@@ -335,7 +339,7 @@ function original(id: number): Promise<Buffer | null> {
 }
 
 /** Bump to make clients and caches fetch freshly rendered images. */
-export const IMAGE_VERSION = 6;
+export const IMAGE_VERSION = 7;
 
 /**
  * Cut out the product with the AI model and encode both sizes as WebP.
@@ -387,12 +391,18 @@ async function encode(rgba: Buffer, width: number, height: number): Promise<Reco
   return out;
 }
 
-const PRIORITY = { viewed: 2, prefetch: 1 } as const;
+const PRIORITY = { viewed: 2, prefetch: 1, upgrade: 0 } as const;
+
+/** A stored cut-out made by a different model (e.g. the retired INT8 build): re-render it. */
+function outdated(id: number): boolean {
+  const meta = catalog.getImageMeta(id);
+  return !!meta && meta.model !== modelId();
+}
 let draining = false;
 
 /** Queue the background removal for an image (persisted, survives restarts). */
 function enqueueImage(id: number, priority: keyof typeof PRIORITY): void {
-  if (catalog.hasFinalImage(id, IMAGE_SIZES.small)) return;
+  if (catalog.hasFinalImage(id, IMAGE_SIZES.small) && !outdated(id)) return;
   catalog.enqueueImageJob(id, PRIORITY[priority]);
   void drainImages();
 }
@@ -404,7 +414,7 @@ export async function drainImages(): Promise<void> {
   try {
     for (let id = catalog.nextImageJob(); id !== null; id = catalog.nextImageJob()) {
       try {
-        if (catalog.hasFinalImage(id, IMAGE_SIZES.small)) {
+        if (catalog.hasFinalImage(id, IMAGE_SIZES.small) && !outdated(id)) {
           catalog.finishImageJob(id);
           continue;
         }
@@ -421,7 +431,7 @@ export async function drainImages(): Promise<void> {
         for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
           catalog.setImage(id, w, 'image/webp', rendered.sizes[name]);
         }
-        catalog.setImageMeta(id, rendered.bounds);
+        catalog.setImageMeta(id, rendered.bounds, modelId());
         catalog.finishImageJob(id);
       } catch (err) {
         logger.warn(`Image ${id} failed: ${(err as Error).message}`);
@@ -464,7 +474,11 @@ export function prefetchImages(ids: number[]): void {
 export async function image(id: number, size: ImageSize): Promise<ImageResult | null> {
   const width = IMAGE_SIZES[size];
   const stored = catalog.getImage(id, width);
-  if (stored) return { body: stored.data, type: stored.type, final: true };
+  if (stored) {
+    // Keep serving an older model's cut-out, but move its re-render up the queue
+    if (outdated(id)) enqueueImage(id, 'viewed');
+    return { body: stored.data, type: stored.type, final: true };
+  }
   const row = catalog.getById(id);
   if (!row?.image) return null;
 
@@ -508,8 +522,30 @@ export async function backfillImageMeta(): Promise<void> {
     const img = catalog.getImage(id, IMAGE_SIZES.large);
     if (!img) continue;
     const { data, info } = await sharp(img.data).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    catalog.setImageMeta(id, opaqueBounds(data, info.width, info.height));
+    catalog.setImageBounds(id, opaqueBounds(data, info.width, info.height), catalog.imageRenderedAt(id) ?? new Date().toISOString().slice(0, 19).replace('T', ' '));
   }
+}
+
+/**
+ * One-time (28 Nov): cut-outs rendered by the retired INT8 build (from its deploy at
+ * 00:54 UTC) notched clear-glass edges. Record each image's model and real render
+ * time, and queue the INT8 ones for a full-precision re-render (served until replaced).
+ */
+function migrateInt8Renders(): void {
+  const done = catalog.runOnce('2026-11-28-int8-rerender', () => {
+    const db = catalog.rawDb();
+    db.exec(`
+      UPDATE image_meta SET
+        rendered_at = COALESCE((SELECT fetched_at FROM image_cache_v4 i WHERE i.id = image_meta.id AND i.width = 240), rendered_at),
+        model = CASE WHEN (SELECT fetched_at FROM image_cache_v4 i WHERE i.id = image_meta.id AND i.width = 240) >= '2026-11-28 00:54:00'
+                     THEN 'bria-int8' ELSE 'bria' END
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO image_jobs (id, priority)
+      SELECT id, 0 FROM image_meta WHERE model = 'bria-int8'
+    `);
+  });
+  if (done) logger.info('Queued INT8 cut-outs for a full-precision re-render');
 }
 
 /** Basic records for several ids (in the order given; unknown ids are left out). */
@@ -519,6 +555,7 @@ export function byIds(ids: number[]): CatalogRow[] {
 
 /** Fill an empty catalog with the most popular perfumes, slowly, in the background. */
 export async function seed(): Promise<void> {
+  if (modelId() === 'bria') migrateInt8Renders();
   await backfillImageMeta().catch((err) => logger.warn(`Image bounds backfill failed: ${(err as Error).message}`));
   if (!maskNeedsRefine()) await purgeUncutImages().catch((err) => logger.warn(`Image cleanup failed: ${(err as Error).message}`));
   void drainImages();

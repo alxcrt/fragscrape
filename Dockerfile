@@ -12,16 +12,11 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM python:3.12-slim AS model
-# BRIA RMBG-2.0 (CC BY-NC 4.0) for background removal, pinned by checksum, then
-# quantized to INT8 with ONNX Runtime's own tool: ~2x faster on CPU, masks
-# visually identical (<0.05% of pixels differ by more than 25%)
+FROM node:22-bookworm-slim AS model
+# BRIA RMBG-2.0 (CC BY-NC 4.0) for background removal, pinned by checksum.
+# Full precision on purpose: an INT8 build was ~2x faster but notched clear-glass edges.
 ADD --chmod=644 --checksum=sha256:5b486f08200f513f460da46dd701db5fbb47d79b4be4b708a19444bcd4e79958 \
-  https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx /tmp/bria-fp32.onnx
-RUN pip install --no-cache-dir onnx==1.17.0 onnxruntime==1.20.1 \
- && mkdir -p /models \
- && python -c "from onnxruntime.quantization import quantize_dynamic, QuantType; quantize_dynamic('/tmp/bria-fp32.onnx', '/models/bria-rmbg-2.0-int8.onnx', weight_type=QuantType.QUInt8)" \
- && chmod 644 /models/*.onnx && rm /tmp/bria-fp32.onnx
+  https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx /models/bria-rmbg-2.0.onnx
 
 FROM node:22-bookworm-slim
 WORKDIR /app
