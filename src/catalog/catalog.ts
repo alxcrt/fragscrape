@@ -251,3 +251,11 @@ export function failImageJob(id: number): void {
 export function imageQueueLength(): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM image_jobs WHERE attempts < 3').get() as { n: number }).n;
 }
+
+export function finalImageIds(width: number): number[] {
+  return (db.prepare('SELECT id FROM image_cache_v4 WHERE width = ?').all(width) as Array<{ id: number }>).map((r) => r.id);
+}
+
+export function deleteFinalImages(id: number): void {
+  db.prepare('DELETE FROM image_cache_v4 WHERE id = ?').run(id);
+}

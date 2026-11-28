@@ -396,7 +396,7 @@ Server-specific settings:
 | `FRAGSCRAPE_BIND` | Compose host binding for port 3000 | `100.84.38.28:13300` |
 | `LEGACY_API` | Keep the original endpoints (search, saved queries, tags, account sync). `false` serves only the simple API | `true` (`false` in `compose.yaml`) |
 | `PUBLIC_URL` | Base URL used for image links in responses | request host |
-| `BG_MODEL` | Background removal model: `bria` (BRIA RMBG-2.0, CC BY-NC 4.0, ~9 GB RAM, ~20-35 s per image on CPU, best on clear glass), `isnet` (ISNet general-use, Apache-2.0, ~1.5 GB, ~2 s) or `birefnet` | `bria` |
+| `BG_MODEL` | Background removal model: `bria` (BRIA RMBG-2.0 quantized to INT8 in the Docker build, CC BY-NC 4.0, ~8 GB RAM, ~8-15 s per image on CPU, best on clear glass), `isnet` (ISNet general-use, Apache-2.0, ~1.5 GB, ~2 s) or `birefnet` | `bria` |
 | `BG_MODEL_DIR` / `BG_MODEL_THREADS` | Model folder and CPU threads for background removal | `/app/models` / `3` |
 
 ### Simple API

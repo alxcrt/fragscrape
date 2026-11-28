@@ -293,7 +293,7 @@ function original(id: number): Promise<Buffer | null> {
 }
 
 /** Bump to make clients and caches fetch freshly rendered images. */
-export const IMAGE_VERSION = 5;
+export const IMAGE_VERSION = 6;
 
 /**
  * Cut out the product with the AI model and encode both sizes as WebP.
@@ -307,8 +307,8 @@ async function renderImage(source: Buffer): Promise<Record<ImageSize, Buffer> | 
     .raw()
     .toBuffer({ resolveWithObject: true });
   let rgba = data;
-  // Only studio shots on a white background get cut out; others are kept as they are
-  if (whiteBorderRatio(data, info.width, info.height) >= 0.5) {
+  // BRIA handles any background; the lighter models only cut out white studio shots
+  if (!maskNeedsRefine() || whiteBorderRatio(data, info.width, info.height) >= 0.5) {
     const alpha = await matteInWorker(source, info.width, info.height);
     if (!alpha) return null;
     rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : alpha);
@@ -372,6 +372,25 @@ export async function drainImages(): Promise<void> {
   }
 }
 
+/**
+ * One-time cleanup: images stored before every background was cut out (grey or
+ * coloured studio backgrounds) have no transparency; drop them so they re-render.
+ */
+export async function purgeUncutImages(): Promise<number> {
+  let purged = 0;
+  for (const id of catalog.finalImageIds(IMAGE_SIZES.small)) {
+    const img = catalog.getImage(id, IMAGE_SIZES.small);
+    if (!img) continue;
+    const { channels, isOpaque } = await sharp(img.data).stats();
+    if (isOpaque || (channels[3] && channels[3].min === 255)) {
+      catalog.deleteFinalImages(id);
+      purged++;
+    }
+  }
+  if (purged) logger.info(`Re-rendering ${purged} images that kept their background`);
+  return purged;
+}
+
 /** Queue images for items about to be shown, behind images people are viewing. */
 export function prefetchImages(ids: number[]): void {
   for (const id of ids) enqueueImage(id, 'prefetch');
@@ -403,6 +422,7 @@ export async function image(id: number, size: ImageSize): Promise<ImageResult | 
 
 /** Fill an empty catalog with the most popular perfumes, slowly, in the background. */
 export async function seed(): Promise<void> {
+  if (!maskNeedsRefine()) await purgeUncutImages().catch((err) => logger.warn(`Image cleanup failed: ${(err as Error).message}`));
   void drainImages();
   if (catalog.count() >= 300) return;
   for (const category of ['unisex', 'mens', 'womens']) {
