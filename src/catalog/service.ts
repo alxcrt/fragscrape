@@ -6,6 +6,7 @@ import { NotFoundError } from '../api/middleware/errorHandler';
 import type { Perfume } from '../types';
 import * as catalog from './catalog';
 import { whiteBorderRatio, refineMatte, withAlpha } from './imageProcess';
+import { sealGlass } from './glassSeal';
 import { maskNeedsRefine, modelId } from './imageAi';
 import { matteInWorker } from './imageWorkerClient';
 import type { CatalogRow } from './catalog';
@@ -357,7 +358,7 @@ async function renderImage(source: Buffer): Promise<{ sizes: Record<ImageSize, B
   if (!maskNeedsRefine() || whiteBorderRatio(data, info.width, info.height) >= 0.5) {
     const alpha = await matteInWorker(source, info.width, info.height);
     if (!alpha) return null;
-    rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : alpha);
+    rgba = withAlpha(data, maskNeedsRefine() ? refineMatte(alpha, info.width, info.height, data) : sealGlass(alpha, info.width, info.height, data));
   }
   return { sizes: await encode(rgba, info.width, info.height), bounds: opaqueBounds(rgba, info.width, info.height) };
 }
@@ -393,10 +394,18 @@ async function encode(rgba: Buffer, width: number, height: number): Promise<Reco
 
 const PRIORITY = { viewed: 2, prefetch: 1, upgrade: 0 } as const;
 
-/** A stored cut-out made by a different model (e.g. the retired INT8 build): re-render it. */
+/**
+ * Identifies how a cut-out was made: the model plus the post-processing applied to its mask.
+ * Stored cut-outs made another way get re-rendered.
+ */
+function renderId(): string {
+  return maskNeedsRefine() ? modelId() : `${modelId()}+glass`;
+}
+
+/** A stored cut-out made by a different model or recipe (e.g. the retired INT8 build): re-render it. */
 function outdated(id: number): boolean {
   const meta = catalog.getImageMeta(id);
-  return !!meta && meta.model !== modelId();
+  return !!meta && meta.model !== renderId();
 }
 let draining = false;
 
@@ -431,7 +440,7 @@ export async function drainImages(): Promise<void> {
         for (const [name, w] of Object.entries(IMAGE_SIZES) as Array<[ImageSize, number]>) {
           catalog.setImage(id, w, 'image/webp', rendered.sizes[name]);
         }
-        catalog.setImageMeta(id, rendered.bounds, modelId());
+        catalog.setImageMeta(id, rendered.bounds, renderId());
         catalog.finishImageJob(id);
       } catch (err) {
         logger.warn(`Image ${id} failed: ${(err as Error).message}`);
@@ -548,6 +557,41 @@ function migrateInt8Renders(): void {
   if (done) logger.info('Queued INT8 cut-outs for a full-precision re-render');
 }
 
+/**
+ * Cut-outs made before the clear-glass repair (sealGlass): check each one's stored mask and
+ * queue a re-render only where the repair would change it; mark the rest as current.
+ * Resumable: rows keep the old id until checked.
+ */
+async function migrateGlassSeal(): Promise<void> {
+  if (maskNeedsRefine()) return;
+  const db = catalog.rawDb();
+  const rows = db.prepare('SELECT id FROM image_meta WHERE model = ?').all(modelId()) as Array<{ id: number }>;
+  const mark = db.prepare('UPDATE image_meta SET model = ? WHERE id = ?');
+  let queued = 0;
+  for (const { id } of rows) {
+    const img = catalog.getImage(id, IMAGE_SIZES.large);
+    if (!img) continue;
+    const { data, info } = await sharp(img.data).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const n = info.width * info.height;
+    const alpha = Buffer.alloc(n);
+    const photo = Buffer.from(data);
+    for (let p = 0; p < n; p++) {
+      const a = data[p * 4 + 3];
+      alpha[p] = a;
+      // The stored WebP drops colour under transparent pixels: put the white backdrop back
+      for (let c = 0; c < 3; c++) photo[p * 4 + c] = Math.round((data[p * 4 + c] * a + 255 * (255 - a)) / 255);
+    }
+    if (sealGlass(alpha, info.width, info.height, photo).equals(alpha)) {
+      mark.run(renderId(), id);
+    } else {
+      catalog.enqueueImageJob(id, PRIORITY.upgrade);
+      queued++;
+    }
+    await new Promise((r) => setImmediate(r));
+  }
+  if (rows.length) logger.info(`Clear-glass repair: checked ${rows.length} cut-outs, queued ${queued} for a re-render`);
+}
+
 /** Basic records for several ids (in the order given; unknown ids are left out). */
 export function byIds(ids: number[]): CatalogRow[] {
   return catalog.getByIds(ids);
@@ -557,6 +601,7 @@ export function byIds(ids: number[]): CatalogRow[] {
 export async function seed(): Promise<void> {
   if (modelId() === 'bria') migrateInt8Renders();
   await backfillImageMeta().catch((err) => logger.warn(`Image bounds backfill failed: ${(err as Error).message}`));
+  await migrateGlassSeal().catch((err) => logger.warn(`Clear-glass check failed: ${(err as Error).message}`));
   if (!maskNeedsRefine()) await purgeUncutImages().catch((err) => logger.warn(`Image cleanup failed: ${(err as Error).message}`));
   void drainImages();
   if (catalog.count() >= 300) return;
