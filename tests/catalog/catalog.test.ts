@@ -60,6 +60,14 @@ describe('catalog', () => {
     expect(catalog.hasFinalImage(20, 240)).toBe(true);
   });
 
+  it('lists and deletes final images', () => {
+    catalog.setImage(30, 240, 'image/webp', Buffer.from('a'));
+    catalog.setImage(30, 720, 'image/webp', Buffer.from('b'));
+    expect(catalog.finalImageIds(240)).toContain(30);
+    catalog.deleteFinalImages(30);
+    expect(catalog.hasFinalImage(30, 240) || catalog.hasFinalImage(30, 720)).toBe(false);
+  });
+
   it('stores lists, similar ids and images', () => {
     catalog.setList('k', [1, 2]);
     expect(catalog.getList('k')?.ids).toEqual([1, 2]);
