@@ -318,7 +318,8 @@ export function rankings(category: string, page: number, production: string, edi
 
 export const IMAGE_SIZES = { small: 240, large: 720, xl: 1440 } as const;
 export type ImageSize = keyof typeof IMAGE_SIZES;
-export interface ImageResult { body: Buffer; type: string; final: boolean }
+/** `version` is the cut-out's render time (the `t` in its URL); a re-render changes it. */
+export interface ImageResult { body: Buffer; type: string; final: boolean; version?: number }
 
 const originals = new Map<number, Promise<Buffer | null>>();
 
@@ -486,7 +487,7 @@ export async function image(id: number, size: ImageSize): Promise<ImageResult | 
   if (stored) {
     // Keep serving an older model's cut-out, but move its re-render up the queue
     if (outdated(id)) enqueueImage(id, 'viewed');
-    return { body: stored.data, type: stored.type, final: true };
+    return { body: stored.data, type: stored.type, final: true, version: renderEpoch(catalog.getImageMeta(id)?.renderedAt) ?? undefined };
   }
   const row = catalog.getById(id);
   if (!row?.image) return null;

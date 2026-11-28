@@ -2,7 +2,7 @@
  * Integration guide shown at the top of /docs (Markdown) and mirrored in the README.
  */
 /** Bumped on every API change; the major number only for breaking changes. */
-export const API_VERSION = '2.2.0';
+export const API_VERSION = '2.2.1';
 
 export const integrationGuide = `
 ## Integration guide
@@ -47,7 +47,10 @@ results to the browser. Never ship the API key in client-side code. Images under
   Poll with \`GET /api/perfumes?ids=…\` (up to 50 per call, e.g. every 1–2 minutes)
   and re-download whenever the URL changes: it changes when an image turns \`ready\`
   and whenever it is re-rendered (final URLs carry the render time, \`&t=\`).
-- A given final URL never changes content: cache it forever.
+- Saved image URLs always show the latest cut-out: a link with the current \`&t=\` is
+  cached for a day, an older or \`t\`-less link for 5 minutes (ETag revalidation). For
+  the freshest image right after a re-render, re-read URLs from the API when you display
+  a saved item (e.g. one \`GET /api/perfumes?ids=…\` call for a whole list).
 - Sizes: \`image\` 240 px for lists, \`imageLarge\` 720 px for detail views,
   \`imageXl\` up to 1440 px for large cards (never upscaled beyond the source).
   Cut-outs are transparent WebP and work on any background colour.
@@ -65,6 +68,9 @@ Changes only **add** fields or endpoints; existing ones keep working, so apps do
 need updating for each release. A breaking change would bump the major version
 (\`info.version\` here, \`apiVersion\` in \`/health\`) and be announced.
 
+- **2.2.1**: clear-glass bottles no longer show bites in their walls (affected
+  cut-outs re-rendered); final images are no longer cached "forever", so saved links
+  pick up re-renders.
 - **2.2.0**: final image URLs carry the render time (\`&t=\`); background removal back
   to full precision (cut-outs re-render in the background, old ones served until then).
 - **2.1.0**: \`imageStatus\`, \`imageVersion\`, \`imageBounds\`, \`imageUpdatedAt\`;

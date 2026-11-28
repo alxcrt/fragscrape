@@ -146,10 +146,16 @@ imagesRouter.get('/:id.:ext(webp|jpg)', asyncHandler(async (req: Request, res: R
   const img = await service.image(id, size);
   if (!img) return sendError(res, 'Image not found', 404);
   res.setHeader('Content-Type', img.type);
-  // Plain photo while the cut-out is queued: browsers must revalidate (ETag) every time,
-  // so the same URL shows the cut-out as soon as it is ready; edge caches skip it
-  res.setHeader('Cache-Control', img.final ? 'public, max-age=31536000, immutable' : 'no-cache');
-  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${size}-${req.query.t ?? ''}"`);
+  // - Plain photo while the cut-out is queued: revalidate every time, so the same URL
+  //   shows the cut-out as soon as it is ready.
+  // - Cut-out requested with its current render time (`t`): cache for a day. Not
+  //   "immutable": a re-render (better model or repair) must reach apps that saved the URL.
+  // - Cut-out requested without `t` or with an older one (a saved link): cache briefly, so
+  //   it picks up re-renders within minutes.
+  // The ETag carries the real render time, so revalidation is a cheap 304.
+  const current = img.final && img.version !== undefined && String(img.version) === String(req.query.t ?? '');
+  res.setHeader('Cache-Control', !img.final ? 'no-cache' : current ? 'public, max-age=86400' : 'public, max-age=300');
+  res.setHeader('ETag', `"${id}-${img.final ? 'final' : 'plain'}-${size}-${img.version ?? ''}"`);
   if (req.fresh) return res.status(304).end();
   return res.send(img.body);
 }));
